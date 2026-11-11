@@ -1,0 +1,17 @@
+Metadata-Version: 2.4
+Name: tweet_topic
+Version: 1.0.0
+Summary: Modular and Extensible Multi-Label Topic Classification Benchmark
+Author: CardiffNLP Tweet Topic Research
+Requires-Python: >=3.9
+Requires-Dist: numpy
+Requires-Dist: pandas
+Requires-Dist: scikit-learn
+Requires-Dist: datasets
+Requires-Dist: transformers
+Requires-Dist: torch
+Requires-Dist: pyyaml
+Dynamic: author
+Dynamic: requires-dist
+Dynamic: requires-python
+Dynamic: summary
