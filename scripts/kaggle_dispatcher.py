@@ -65,21 +65,33 @@ KERNELS_SPEC = {
 }
 
 
-# v2 suites run the *package* (scripts/run.py + configs/v2/*.yaml) from notebooks built by
+# Package suites run the *package* (scripts/run.py + YAML configs) from notebooks built by
 # scripts/build_package_notebooks.py. They are opt-in: they are NOT part of the default "push_all" fleet, so a bare
 # push_all cannot accidentally spend GPU quota on them. Target them explicitly, e.g.
-#   --kernels kernel_v2_d1_smoke           (validate the pipeline on a tiny subset first)
-#   --kernels kernel_v2_d1,kernel_v2_encoders
+#   --kernels kernel_v3_loss_smoke                         (validate the pipeline on a tiny subset first)
+#   --kernels kernel_v3_loss,kernel_v3_technique,kernel_v3_d1_native
 # Only acc1-acc3 exist in ~/.kaggle_accounts; each account can run at most 2 GPU sessions at once.
-_V2_SUITE_ACCOUNTS = {"encoders": "acc1", "d1": "acc2", "qwen_qlora": "acc3", "ml_audit": "acc1"}
-for _suite, _acc in _V2_SUITE_ACCOUNTS.items():
+_PACKAGE_SUITE_ACCOUNTS = {
+    # Vòng 3 — one suite per account, each suite runs its configs sequentially.
+    "v3_loss": ("loss", "acc1", "v3"),
+    "v3_technique": ("technique", "acc2", "v3"),
+    "v3_d1_native": ("d1_native", "acc3", "v3"),
+    # Vòng 2 — kept for reproducibility of the historical results.
+    "v2_encoders": ("encoders", "acc1", "v2"),
+    "v2_d1": ("d1", "acc2", "v2"),
+    "v2_qwen_qlora": ("qwen_qlora", "acc3", "v2"),
+    "v2_ml_audit": ("ml_audit", "acc1", "v2"),
+}
+for _prefix, (_suite, _acc, _version) in _PACKAGE_SUITE_ACCOUNTS.items():
     for _smoke in (True, False):
-        _key = f"kernel_v2_{_suite}{'_smoke' if _smoke else ''}"
-        _slug = f"tweet-topic-v2-{_suite.replace('_', '-')}{'-smoke' if _smoke else ''}"
+        _key = f"kernel_{_prefix}{'_smoke' if _smoke else ''}"
+        _slug = f"tweet-topic-{_prefix.replace('_', '-')}{'-smoke' if _smoke else ''}"
         KERNELS_SPEC[_key] = {
             "slug": _slug,
             "title": _slug,
-            "notebook_source": BENCHMARK_DIR / "notebooks" / f"v2_{_suite}{'_smoke' if _smoke else ''}.ipynb",
+            "notebook_source": BENCHMARK_DIR
+            / "notebooks"
+            / f"{_version}_{_suite}{'_smoke' if _smoke else ''}.ipynb",
             "is_gpu": True,
             "default_acc": _acc,
             "opt_in": True,

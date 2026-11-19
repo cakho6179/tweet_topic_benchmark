@@ -1,21 +1,17 @@
-"""Direction 2: Transformer Encoder Baseline (RoBERTa / DeBERTa / Twitter-RoBERTa).
+"""Direction 2: Transformer Encoder Baseline (BERT / RoBERTa / DeBERTa).
 
-Two head variants, selected purely by config (defaults reproduce the original baseline exactly):
-
+Two head variants, selected purely by config:
 * ``pooling: cls`` and ``msd_samples: 1``  -> stock ``AutoModelForSequenceClassification`` head.
 * anything else                            -> ``_PooledEncoder``: backbone + (attention|mean|cls) pooling
                                               + Multi-Sample-Dropout head.
-
-Note on checkpoints: ``cardiffnlp/twitter-roberta-base-2021-124m-topic-multi`` is *already fine-tuned* on
-``tweet_topic_multi`` with ``train_all`` (it contains 2021 data). For a clean in-time / out-of-time protocol use a
-pretrain-only checkpoint such as ``cardiffnlp/twitter-roberta-base-dec2020``.
 """
 
 from __future__ import annotations
 
-import gc
 import json
 import logging
+import random
+import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 import numpy as np
@@ -27,18 +23,29 @@ from transformers import (
     AutoModel,
     AutoModelForSequenceClassification,
     AutoTokenizer,
+    get_cosine_schedule_with_warmup,
     get_linear_schedule_with_warmup,
 )
 
 from tweet_topic.core.base import BaseTopicClassifier
 from tweet_topic.core.registry import get_loss_fn, register_model
 from tweet_topic.data.taxonomy import NUM_CLASSES
+from tweet_topic.evaluation.metrics import compute_metrics
+from tweet_topic.evaluation.thresholding import calibrate_per_class_thresholds
 from tweet_topic.models._backbone import pool_tokens
 from tweet_topic.models.bert.pooling import AttentionPooling, MultiSampleDropoutHead, reduce_multisample_loss
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_CHECKPOINT = "cardiffnlp/twitter-roberta-base-dec2020"
+DEFAULT_CHECKPOINT = "bert-base-uncased"
+
+
+def _set_seed(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 class _TorchTweetDataset(Dataset):
@@ -104,28 +111,44 @@ class TransformerEncoderClassifier(BaseTopicClassifier):
     def __init__(self, config: Dict[str, Any]):
         super().__init__(config)
         self.model_name = config.get("model_name", DEFAULT_CHECKPOINT)
-        self.max_length = config.get("max_length", 128)
-        self.batch_size = config.get("batch_size", 32)
-        self.eval_batch_size = config.get("eval_batch_size", 64)
-        self.epochs = config.get("epochs", 3)
+        self.max_length = int(config.get("max_length", 128))
+        self.batch_size = int(config.get("batch_size", 32))
+        self.eval_batch_size = int(config.get("eval_batch_size", 64))
+        self.grad_accum = max(1, int(config.get("grad_accum", 1)))
+        self.epochs = int(config.get("epochs", 5))
         self.lr = float(config.get("lr", 2e-5))
         self.head_lr = float(config.get("head_lr", self.lr))
         self.weight_decay = float(config.get("weight_decay", 0.01))
+        self.warmup_ratio = float(config.get("warmup_ratio", 0.1))
+        self.scheduler_type = config.get("scheduler", "linear")  # linear | cosine
+        self.grad_clip = float(config.get("grad_clip", 1.0))
         self.pooling = config.get("pooling", "cls")
         self.msd_samples = int(config.get("msd_samples", 1))
         self.msd_p = float(config.get("msd_p", 0.2))
         self.attn_dim = int(config.get("attn_dim", 256))
+        # Ablation control: keep the custom pooling/MSD head even for CLS + one branch, so that
+        # pooling comparisons share exactly the same classifier head.
+        self.force_custom_head = bool(config.get("force_custom_head", False))
+        self.seed = int(config.get("seed", 42))
+        self.save_best = bool(config.get("save_best", True))
+        self.select_metric = config.get("select_metric", "val_macro_f1_tuned")
+        patience = config.get("early_stopping_patience")
+        self.early_stopping_patience = int(patience) if patience is not None else None
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        self.history: List[Dict[str, Any]] = []
+        self.best_epoch: Optional[int] = None
 
         # Pluggable loss function
         loss_type = config.get("loss_type", "bce")
+        loss_params = dict(config.get("loss_params") or {})
         loss_cls = get_loss_fn(loss_type)
-        self.criterion = loss_cls()
+        self.criterion = loss_cls(**loss_params)
 
-        logger.info("Initializing Tokenizer & Model '%s' on %s...", self.model_name, self.device)
+        logger.info("Initializing Tokenizer & Model '%s' on %s (loss=%s)...", self.model_name, self.device, loss_type)
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
 
-        self.custom_head = not (self.pooling == "cls" and self.msd_samples <= 1)
+        self.custom_head = self.force_custom_head or not (self.pooling == "cls" and self.msd_samples <= 1)
         if self.custom_head:
             backbone = AutoModel.from_pretrained(self.model_name)
             hidden_size = backbone.config.hidden_size
@@ -167,6 +190,35 @@ class TransformerEncoderClassifier(BaseTopicClassifier):
         body = [p for p in self.model.parameters() if id(p) not in head_ids]
         return [{"params": body, "lr": self.lr}, {"params": head_params, "lr": self.head_lr}]
 
+    @torch.no_grad()
+    def _eval_loader(self, loader: DataLoader, y_true: np.ndarray) -> Dict[str, Any]:
+        self.model.eval()
+        all_logits = []
+        for batch in loader:
+            input_ids = batch["input_ids"].to(self.device)
+            attention_mask = batch["attention_mask"].to(self.device)
+            with torch.amp.autocast("cuda", enabled=(self.device.type == "cuda")):
+                logits = self._logits(input_ids, attention_mask)
+            all_logits.append(logits.float().cpu())
+        logits_t = torch.cat(all_logits, dim=0)
+        targets_t = torch.as_tensor(y_true, dtype=torch.float32)
+
+        val_loss = float(self.criterion(logits_t.to(self.device), targets_t.to(self.device)).item())
+        val_bce = float(nn.functional.binary_cross_entropy_with_logits(logits_t, targets_t).item())
+        probs = torch.sigmoid(logits_t).numpy()
+
+        m05 = compute_metrics(y_true, (probs >= 0.5).astype(int))
+        taus = calibrate_per_class_thresholds(y_true, probs)
+        mtuned = compute_metrics(y_true, (probs >= taus[None, :]).astype(int))
+        return {
+            "val_loss": round(val_loss, 5),
+            "val_bce_loss": round(val_bce, 5),
+            "val_micro_f1_05": m05["micro_f1"],
+            "val_macro_f1_05": m05["macro_f1"],
+            "val_micro_f1_tuned": mtuned["micro_f1"],
+            "val_macro_f1_tuned": mtuned["macro_f1"],
+        }
+
     def fit(
         self,
         train_texts: List[str],
@@ -174,24 +226,49 @@ class TransformerEncoderClassifier(BaseTopicClassifier):
         val_texts: Optional[List[str]] = None,
         val_labels: Optional[np.ndarray] = None,
     ) -> TransformerEncoderClassifier:
+        self.history = []
+        self.best_epoch = None
         if self.epochs <= 0:
             logger.info("Epochs = 0, skipping training (zero-shot/evaluation mode).")
             return self
 
+        _set_seed(self.seed)
+        if hasattr(self.criterion, "set_pos_weight_from_labels"):
+            self.criterion.set_pos_weight_from_labels(train_labels)
+            logger.info("Computed train pos_weight (max=%.1f).", self.criterion.pos_weight_max)
+
         train_ds = _TorchTweetDataset(train_texts, train_labels, self.tokenizer, self.max_length)
-        train_loader = DataLoader(train_ds, batch_size=self.batch_size, shuffle=True)
+        gen = torch.Generator().manual_seed(self.seed)
+        train_loader = DataLoader(train_ds, batch_size=self.batch_size, shuffle=True, generator=gen)
+
+        val_loader = None
+        if val_texts is not None and val_labels is not None:
+            val_ds = _TorchTweetDataset(val_texts, None, self.tokenizer, self.max_length)
+            val_loader = DataLoader(val_ds, batch_size=self.eval_batch_size, shuffle=False)
 
         optimizer = torch.optim.AdamW(self._param_groups(), weight_decay=self.weight_decay)
-        total_steps = len(train_loader) * self.epochs
-        scheduler = get_linear_schedule_with_warmup(optimizer, int(total_steps * 0.1), total_steps)
+        steps_per_epoch = max(1, (len(train_loader) + self.grad_accum - 1) // self.grad_accum)
+        total_steps = steps_per_epoch * self.epochs
+        warmup_steps = int(total_steps * self.warmup_ratio)
+        if self.scheduler_type == "cosine":
+            scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
+        else:
+            scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
         scaler = torch.amp.GradScaler("cuda", enabled=(self.device.type == "cuda"))
 
-        logger.info("Starting Transformer Encoder training for %d epochs...", self.epochs)
+        minimise = self.select_metric in {"val_loss", "val_bce_loss"}
+        best_score = float("inf") if minimise else float("-inf")
+        best_state: Optional[Dict[str, torch.Tensor]] = None
+        bad_epochs = 0
+
+        logger.info("Starting Transformer Encoder training for %d epochs (seed=%d)...", self.epochs, self.seed)
         for epoch in range(1, self.epochs + 1):
+            t0 = time.perf_counter()
             self.model.train()
             running_loss = 0.0
-            for batch in train_loader:
-                optimizer.zero_grad()
+            optimizer.zero_grad()
+
+            for step, batch in enumerate(train_loader, start=1):
                 input_ids = batch["input_ids"].to(self.device)
                 attention_mask = batch["attention_mask"].to(self.device)
                 labels = batch["labels"].to(self.device)
@@ -200,14 +277,62 @@ class TransformerEncoderClassifier(BaseTopicClassifier):
                     logits = self._logits(input_ids, attention_mask)
                     loss = reduce_multisample_loss(self.criterion, logits.float(), labels)
 
-                scaler.scale(loss).backward()
-                scaler.step(optimizer)
-                scaler.update()
-                scheduler.step()
-                running_loss += loss.item()
+                running_loss += float(loss.item())
+                scaler.scale(loss / self.grad_accum).backward()
+
+                if step % self.grad_accum == 0 or step == len(train_loader):
+                    if self.grad_clip > 0:
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
+                    scaler.step(optimizer)
+                    scaler.update()
+                    scheduler.step()
+                    optimizer.zero_grad()
 
             avg_loss = running_loss / max(1, len(train_loader))
-            logger.info("Epoch %d/%d - Loss: %.4f", epoch, self.epochs, avg_loss)
+            record: Dict[str, Any] = {
+                "epoch": epoch,
+                "train_loss": round(avg_loss, 5),
+                "lr_backbone": optimizer.param_groups[0]["lr"],
+                "lr_head": optimizer.param_groups[-1]["lr"],
+                "epoch_time_sec": round(time.perf_counter() - t0, 2),
+            }
+
+            if val_loader is not None and val_labels is not None:
+                val_stats = self._eval_loader(val_loader, val_labels)
+                record.update(val_stats)
+                score = float(val_stats[self.select_metric])
+                improved = (score < best_score - 1e-5) if minimise else (score > best_score + 1e-5)
+                if improved:
+                    best_score = score
+                    self.best_epoch = epoch
+                    bad_epochs = 0
+                    if self.save_best:
+                        best_state = {k: v.detach().cpu().clone() for k, v in self.model.state_dict().items()}
+                else:
+                    bad_epochs += 1
+
+                logger.info(
+                    "Epoch %d/%d | train_loss=%.4f | val_loss=%.4f | val_macro_05=%.4f | val_macro_tuned=%.4f (%.1fs)",
+                    epoch,
+                    self.epochs,
+                    avg_loss,
+                    val_stats["val_loss"],
+                    val_stats["val_macro_f1_05"],
+                    val_stats["val_macro_f1_tuned"],
+                    record["epoch_time_sec"],
+                )
+            else:
+                logger.info("Epoch %d/%d | train_loss=%.4f (%.1fs)", epoch, self.epochs, avg_loss, record["epoch_time_sec"])
+
+            self.history.append(record)
+            if self.early_stopping_patience is not None and bad_epochs >= self.early_stopping_patience:
+                logger.info("Early stopping triggered at epoch %d (best epoch=%s).", epoch, self.best_epoch)
+                break
+
+        if best_state is not None:
+            self.model.load_state_dict({k: v.to(self.device) for k, v in best_state.items()})
+            logger.info("Restored best checkpoint from epoch %s (%s=%.4f).", self.best_epoch, self.select_metric, best_score)
 
         return self
 
@@ -241,6 +366,7 @@ class TransformerEncoderClassifier(BaseTopicClassifier):
                         "msd_samples": self.msd_samples,
                         "msd_p": self.msd_p,
                         "attn_dim": self.attn_dim,
+                        "force_custom_head": self.force_custom_head,
                     },
                     indent=2,
                 ),

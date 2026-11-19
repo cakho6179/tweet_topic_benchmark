@@ -134,6 +134,19 @@ def main():
     val_metrics = compute_metrics(y_val, binarize(val_probs, thresholds))
     logger.info("Validation -> Micro-F1: %.4f | Macro-F1: %.4f", val_metrics["micro_f1"], val_metrics["macro_f1"])
 
+    # Side-by-side threshold comparison (0.5 vs global tuned vs per-class tuned) from the same probabilities
+    tau_global, _ = calibrate_global_threshold(y_val, val_probs, criterion=cfg.get("criterion", "micro_f1"))
+    tau_per_class = calibrate_per_class_thresholds(y_val, val_probs)
+    threshold_comparison: Dict[str, Any] = {
+        "validation": {
+            "default_0.5": compute_metrics(y_val, binarize(val_probs, 0.5)),
+            "global_tuned": compute_metrics(y_val, binarize(val_probs, tau_global)),
+            "per_class_tuned": compute_metrics(y_val, binarize(val_probs, tau_per_class)),
+        },
+        "tau_global": round(float(tau_global), 4),
+        "tau_per_class": np.atleast_1d(tau_per_class).round(4).tolist(),
+    }
+
     # ---- test evaluation -------------------------------------------------------------------------------
     test_results: Dict[str, Any] = {}
     test_preds_dict: Dict[str, Any] = {}
@@ -142,6 +155,11 @@ def main():
         preds = binarize(probs, thresholds)
         metrics = compute_metrics(y_test, preds)
         test_results[s_name] = metrics
+        threshold_comparison[s_name] = {
+            "default_0.5": compute_metrics(y_test, binarize(probs, 0.5)),
+            "global_tuned": compute_metrics(y_test, binarize(probs, tau_global)),
+            "per_class_tuned": compute_metrics(y_test, binarize(probs, tau_per_class)),
+        }
         test_preds_dict[s_name] = {
             "ids": test_ids,
             "y_probs": probs.tolist(),
@@ -157,13 +175,18 @@ def main():
             metrics["exact_match_ratio"],
         )
 
+    history = getattr(model, "history", None) or []
     summary: Dict[str, Any] = {
         "experiment_name": exp_name,
         "config": cfg,
+        "best_epoch": getattr(model, "best_epoch", None),
         "validation_metrics": val_metrics,
         "test_metrics": test_results,
         "thresholds": np.atleast_1d(thresholds).round(4).tolist(),
+        "threshold_comparison": threshold_comparison,
     }
+    if history:
+        summary["training_history"] = history
 
     # ---- optional: calibration report ------------------------------------------------------------------
     if cfg.get("calibration_report", temp_mode != "none"):
@@ -216,6 +239,10 @@ def main():
     # ---- persist ---------------------------------------------------------------------------------------
     with open(out_dir / "metrics_summary.json", "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
+
+    if history:
+        with open(out_dir / "training_history.json", "w", encoding="utf-8") as f:
+            json.dump(history, f, indent=2)
 
     with open(out_dir / "test_predictions.json", "w", encoding="utf-8") as f:
         json.dump(test_preds_dict, f)

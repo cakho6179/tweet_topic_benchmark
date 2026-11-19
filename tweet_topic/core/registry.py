@@ -23,6 +23,7 @@ _MODEL_MODULE_MAP = {
     "ml_lightgbm": "tweet_topic.models.ml.gbm_model",
     "bert_encoder": "tweet_topic.models.bert.encoder_model",
     "decision_d1_local": "tweet_topic.models.decision.local_d1",
+    "decision_d1_system_one": "tweet_topic.models.decision.local_d1",
     "decision_d1_probe": "tweet_topic.models.decision.d1_probe",
     "decision_d1_api": "tweet_topic.models.decision.api_d1",
     "llm_qwen3_5_4b": "tweet_topic.models.llm.qwen_engine",
@@ -31,8 +32,8 @@ _MODEL_MODULE_MAP = {
 
 _LOSS_MODULE_MAP = {
     "bce": "tweet_topic.models.bert.losses",
+    "weighted_bce": "tweet_topic.models.bert.losses",
     "focal": "tweet_topic.models.bert.losses",
-    "asymmetric": "tweet_topic.models.bert.losses",
 }
 
 

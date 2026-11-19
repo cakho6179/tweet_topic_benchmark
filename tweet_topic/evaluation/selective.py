@@ -81,10 +81,11 @@ def coverage_curve(
 
     def _quality(mask: np.ndarray) -> Dict[str, float]:
         if mask.sum() == 0:
-            return {"micro_f1": float("nan"), "exact_match": float("nan")}
+            return {"micro_f1": float("nan"), "macro_f1": float("nan"), "exact_match": float("nan")}
         yt, yp = y_true[mask], preds[mask]
         return {
             "micro_f1": float(f1_score(yt, yp, average="micro", zero_division=0)),
+            "macro_f1": float(f1_score(yt, yp, average="macro", zero_division=0)),
             "exact_match": float((yt == yp).all(axis=1).mean()),
         }
 
@@ -98,8 +99,10 @@ def coverage_curve(
                 "coverage": float(cov),
                 "n_automated": int(keep.sum()),
                 "auto_micro_f1": auto["micro_f1"],
+                "auto_macro_f1": auto["macro_f1"],
                 "auto_exact_match": auto["exact_match"],
                 "escalated_micro_f1": escalated["micro_f1"],
+                "escalated_macro_f1": escalated["macro_f1"],
                 "escalated_exact_match": escalated["exact_match"],
             }
         )

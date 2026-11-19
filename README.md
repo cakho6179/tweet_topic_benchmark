@@ -62,18 +62,27 @@ tweet_topic_benchmark/
 │   └── addons/                      # Mô-đun cắm-và-chạy (tiền xử lý, ensemble, ví dụ)
 ├── configs/
 │   ├── ml/  bert/  qwen_llm/        # Cấu hình các baseline ban đầu (chạy bằng scripts/run.py)
-│   └── v2/                          # Cấu hình các thí nghiệm kiểm chứng (RoBERTa, d1, QLoRA, auditor)
+│   ├── v2/                          # Cấu hình các thí nghiệm kiểm chứng (RoBERTa, d1, QLoRA, auditor)
+│   ├── v3/                          # Vòng 3: loss L1-L5, thang kỹ thuật P0-P6, d1 native
+│   ├── v3_head/                     # Vòng 3: L2-L5 chạy lại với head của P0 (kiểm soát head)
+│   └── v3_seeds/                    # Vòng 3: P0, P6, L2 với seed 1337 và 2024
 ├── notebooks/
 │   ├── 00_..04_*.ipynb              # Notebook Kaggle độc lập của 4 baseline ban đầu (+ EDA)
-│   └── v2_*.ipynb                   # Notebook nhúng source package, chạy scripts/run.py trên Kaggle
+│   ├── v2_*.ipynb                   # Notebook nhúng source package, chạy scripts/run.py trên Kaggle
+│   └── v3_*.ipynb                   # Như v2, cho Vòng 3 (suite loss, technique_a/b, headctl, seed*, d1_native, ...)
 ├── scripts/
 │   ├── run.py                       # Runner chính: dữ liệu → mô hình → ngưỡng → hiệu chuẩn → đánh giá
-│   ├── build_package_notebooks.py   # Tạo notebook v2 (nhúng source package)
+│   ├── build_package_notebooks.py   # Tạo notebook v2/v3 (nhúng source package)
 │   ├── make_kaggle_bundle.py        # Tạo bundle để đẩy lên Kaggle
-│   ├── generate_benchmark_figures.py# Vẽ biểu đồ từ kết quả thật (outputs/v2_results/)
+│   ├── collect_results.py           # Gom artifact tải về từ Kaggle vào outputs/<experiment>/
+│   ├── postprocess_analysis.py      # Hiệu chuẩn + đường cong tỷ lệ tự động hóa từ xác suất đã lưu
+│   ├── build_v3_report_tables.py    # In các bảng Vòng 3 từ outputs/v3_*
+│   ├── generate_benchmark_figures.py# Vẽ biểu đồ từ kết quả thật (outputs/v2_results/, outputs/v3_*)
+│   ├── generate_architecture_diagrams.py# Vẽ 7 sơ đồ pipeline kiến trúc (doc/figures/arch_*.png), không cần kết quả chạy
 │   ├── kaggle_dispatcher.py         # Điều phối kernel của 4 baseline ban đầu
 │   └── build_kaggle_notebooks.py    # Tạo lại notebook 01-04
 ├── outputs/v2_results/              # Kết quả cuối của các thí nghiệm v2 (metrics_summary)
+├── outputs/v3_*/                    # Kết quả Vòng 3: metrics_summary, training_history, postprocess, ...
 ├── eda/  doc/  learning/            # EDA, báo cáo, ghi chú học tập
 ├── temp/                            # Các phần đã loại khỏi pipeline (xem temp/MOVED.md để khôi phục)
 └── README.md
@@ -132,6 +141,33 @@ python scripts/generate_benchmark_figures.py                    # vẽ biểu đ
 ```
 Smoke test đã xác nhận suite `d1` và `encoders` chạy hết trên Kaggle; `qwen_qlora` và `ml_audit` chưa được smoke test.
 Dispatcher cũ (`kaggle_dispatcher.py`) chỉ đặt `KAGGLE_CONFIG_DIR` nên có thể đẩy nhầm tài khoản; nên dùng `kaggle_acc.py`.
+
+### Cách 4 (v3): Vòng 3, ablation loss và kỹ thuật trên BERT-base
+Báo cáo hiện hành: [`doc/MASTER_TWEET_TOPIC_SYSTEM_REPORT.md`](doc/MASTER_TWEET_TOPIC_SYSTEM_REPORT.md). Báo cáo gộp Vòng 1 đến 3, theo bảy phần, kèm tham số từng mô hình (Mục 6.7 và Phụ lục A). Hướng gác lại (ASL): [`doc/Future.md`](doc/Future.md).
+
+| Suite (`notebooks/v3_<suite>.ipynb`) | Cấu hình | Nội dung |
+|---|---|---|
+| `loss` | `configs/v3/v3_l1..l5` | BCE, Weighted BCE, Focal (γ=2/α=0.25, γ=1/α=0.25, γ=2/không α) với head mặc định |
+| `headctl` | `configs/v3_head/v3_h2..h5` | L2-L5 chạy lại với head của P0 (tách ảnh hưởng của head khỏi loss) |
+| `technique_a`, `technique_b` | `configs/v3/v3_p0, p2..p6` | Thang kỹ thuật: cleaner, weighted BCE, mean / attention pooling, MSD (P1, P7, P8 tính sau từ xác suất đã lưu) |
+| `seed1337`, `seed2024` | `configs/v3_seeds/*` | P0, P6, L2 với hai seed bổ sung, để đo nhiễu giữa các lần chạy |
+| `d1_native` hoặc `gpu_d1_system_one[_noul]` | `configs/v3/v3_d1_system_one[_noul]` | Liquid d1-2B với API `system_one` gốc (cần `transformers>=5.19`; notebook tự cài) |
+
+Các notebook `cpu_*` chạy từng cấu hình một trên CPU, chỉ dùng khi hết hạn mức GPU hoặc để đối chiếu chéo; không trộn kết quả CPU vào `outputs/v3_*`.
+
+```bash
+python scripts/build_package_notebooks.py                        # build notebook v3
+python $S push --acc acc6 --gpu kaggle/<bundle>                  # đẩy lên Kaggle (mỗi tài khoản tối đa 2 phiên GPU song song)
+python $S wait --poll 240 --out kaggle/outputs                   # chờ xong, tải kết quả
+python scripts/collect_results.py --source kaggle/outputs --overwrite   # gom vào outputs/<experiment>/
+python scripts/postprocess_analysis.py --all                     # hiệu chuẩn + đường cong tỷ lệ tự động hóa
+python -I -X utf8 scripts/build_v3_report_tables.py              # in bảng cho báo cáo
+python -I -X utf8 scripts/generate_benchmark_figures.py          # vẽ doc/figures/v3_*.png
+python -I -X utf8 scripts/generate_architecture_diagrams.py     # vẽ doc/figures/arch_*.png (sơ đồ kiến trúc dạng nghiên cứu)
+```
+Lưu ý khi chạy: mỗi tài khoản Kaggle có hạn mức GPU 30 giờ mỗi tuần; tài khoản chưa xác minh số điện thoại không có Internet
+trong kernel nên không tải được dataset và mô hình từ Hugging Face (kernel báo `Couldn't reach 'cardiffnlp/tweet_topic_multi' on the Hub`).
+Kết quả GPU trên Kaggle (T4/P100) dùng fp16 cho d1; CPU dùng fp32, nên không so sánh từng chữ số giữa hai môi trường.
 
 ---
 

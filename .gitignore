@@ -1,10 +1,81 @@
-/configs
-/data
-/kaggle
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# C extensions & build artifacts
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+tweet_topic.egg-info/
+.installed.cfg
+*.egg
+
+# Testing & Coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.hypothesis/
+.cache/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/*
+
+# Virtual Environments
+.env
+.venv/
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE & Editor settings
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Large Model Weights, Checkpoints & Embeddings
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+*.h5
+*.tflite
+*.ckpt
+*.joblib
+*.pkl
+
+# Project-specific ignored folders & files
+/configs/
+/data/
+/kaggle/
 /kaggle_jobs.json
-/notebooks
-/outputs
-/setup.py
-/temp
-/tweet_topic.egg-info
-/scripts
+/kernel_runners/
+/notebooks/
+/outputs/
+/temp/
+/tmp/
+/scratch/
+*.log

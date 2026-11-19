@@ -2,17 +2,26 @@
 
 Why this exists
 ---------------
-The older notebooks (01-06) re-implement their model inline and never import ``tweet_topic/``. Anything added to the
-package (attention pooling, MSD, temperature scaling, coverage curves, the d1 probe, the QLoRA classifier, the
+The older notebooks (01-06) re-implement their model inline and never import ``tweet_topic/``. Anything added to
+the package (attention pooling, MSD, temperature scaling, coverage curves, the d1 probe, the QLoRA classifier, the
 auditor) is therefore invisible to them. These notebooks close that gap: the project source is embedded in the
 notebook as a base64 zip, unpacked on Kaggle, and executed with ``python scripts/run.py --config ...``.
+
+Vòng 3 suites
+-------------
+``loss``       BERT-base loss ablation (L1-L5).
+``technique``  BERT-base progressive technique ablation (P0, P2-P6; P1/P7/P8 are post-hoc).
+``d1_native``  Liquid d1-2B native ``system_one`` zero-shot (choice_multiple and noul).
+
+The d1 checkpoint requires ``transformers>=5.19`` and the vision dependencies, so only that notebook upgrades
+transformers. The BERT notebooks use the Kaggle image's preinstalled version.
 
 Nothing is executed locally. Rebuild after every code change:
 
     python scripts/build_package_notebooks.py
 
-Outputs go to ``notebooks/`` as ``v2_<suite>.ipynb`` (full) and ``v2_<suite>_smoke.ipynb`` (64 train / 32 eval
-samples, a few minutes) so a suite can be validated on Kaggle before spending the full GPU budget.
+Outputs go to ``notebooks/`` as ``v3_<suite>.ipynb`` (full) and ``v3_<suite>_smoke.ipynb`` (64 train / 32 eval
+samples) so a suite can be validated on Kaggle before spending the full GPU budget.
 """
 
 from __future__ import annotations
@@ -25,34 +34,111 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 NOTEBOOKS_DIR = ROOT / "notebooks"
+PREFIX = "v3"
 
 # suite key -> (title, [configs run sequentially])
 SUITES = {
-    "encoders": (
-        "Twitter-RoBERTa (clean checkpoint): BCE control, temperature scaling, ASL + per-class thresholds, "
-        "attention pooling + MSD",
+    "loss": (
+        "Vòng 3 — BERT-base loss ablation: BCE, Weighted BCE, Focal (gamma/alpha variants)",
         [
-            "configs/v2/roberta_dec2020_bce.yaml",
-            "configs/v2/roberta_dec2020_bce_tempscale.yaml",
-            "configs/v2/roberta_dec2020_asl_perclass.yaml",
-            "configs/v2/roberta_dec2020_attnpool_msd_asl.yaml",
+            "configs/v3/v3_l1_bce.yaml",
+            "configs/v3/v3_l2_weighted_bce.yaml",
+            "configs/v3/v3_l3_focal_g2.yaml",
+            "configs/v3/v3_l4_focal_g1.yaml",
+            "configs/v3/v3_l5_focal_g2_noalpha.yaml",
         ],
     ),
-    "d1": (
-        "Liquid d1-2B: frozen-feature linear probe (main) and option-letter zero-shot (secondary)",
-        ["configs/v2/d1_probe.yaml", "configs/v2/d1_zero_shot_letters.yaml"],
+    "technique": (
+        "Vòng 3 — BERT-base progressive technique ablation: P0 baseline, cleaner, weighted BCE, "
+        "mean/attention pooling, MSD",
+        [
+            "configs/v3/v3_p0_custom_cls_bce.yaml",
+            "configs/v3/v3_p2_cleaner_bce.yaml",
+            "configs/v3/v3_p3_cleaner_weighted_bce.yaml",
+            "configs/v3/v3_p4_cleaner_weighted_mean.yaml",
+            "configs/v3/v3_p5_cleaner_weighted_attention.yaml",
+            "configs/v3/v3_p6_cleaner_weighted_attn_msd.yaml",
+        ],
     ),
-    "qwen_qlora": (
-        "Qwen3.5-4B QLoRA supervised multi-label classifier",
-        ["configs/v2/qwen_qlora_cls.yaml"],
-    ),
-    "ml_audit": (
-        "TF-IDF + preprocessor add-on, with Qwen3.5-4B chain-of-thought auditor on ambiguous tweets",
-        ["configs/v2/ml_ovr_preproc_audit.yaml"],
+    "d1_native": (
+        "Vòng 3 — Liquid d1-2B native system_one zero-shot: multi-choice and 19 x noul",
+        [
+            "configs/v3/v3_d1_system_one.yaml",
+            "configs/v3/v3_d1_system_one_noul.yaml",
+        ],
     ),
 }
 
-PIP_LINE = "!pip install -q transformers accelerate bitsandbytes datasets torch scikit-learn peft scipy pyyaml einops timm"
+PIP_LINES = {
+    "loss": "!pip install -q accelerate datasets scikit-learn scipy pyyaml",
+    "technique": "!pip install -q accelerate datasets scikit-learn scipy pyyaml",
+    "d1_native": (
+        # torchaudio is not needed and its CUDA build can mismatch the image's torch, which breaks the image-processor
+        # import inside transformers. Upgrade only transformers; keep the image's torch/torchvision pair intact.
+        "!pip uninstall -y -q torchaudio\n"
+        "!pip install -q -U \"transformers>=5.19\"\n"
+        "!pip install -q accelerate datasets scikit-learn scipy pyyaml torchvision pillow einops"
+    ),
+}
+
+
+# The technique ladder split in two halves so that it can run on two GPU sessions in parallel.
+SUITES["technique_a"] = (
+    "Vòng 3 — technique ladder, nửa 1: P0, P2, P3",
+    [
+        "configs/v3/v3_p0_custom_cls_bce.yaml",
+        "configs/v3/v3_p2_cleaner_bce.yaml",
+        "configs/v3/v3_p3_cleaner_weighted_bce.yaml",
+    ],
+)
+SUITES["technique_b"] = (
+    "Vòng 3 — technique ladder, nửa 2: P4, P5, P6",
+    [
+        "configs/v3/v3_p4_cleaner_weighted_mean.yaml",
+        "configs/v3/v3_p5_cleaner_weighted_attention.yaml",
+        "configs/v3/v3_p6_cleaner_weighted_attn_msd.yaml",
+    ],
+)
+PIP_LINES["technique_a"] = PIP_LINES["technique"]
+PIP_LINES["technique_b"] = PIP_LINES["technique"]
+
+# Loss ablation with the *same head as P0* (custom head, head lr 1e-3). The stock-head L-series is confounded by
+# head under-training (best epoch = last epoch for every run), so this controls for the head.
+SUITES["headctl"] = (
+    "Vòng 3 — loss ablation với head của P0: Weighted BCE, Focal (γ=2/α=0.25, γ=1/α=0.25, γ=2/không α)",
+    [
+        "configs/v3_head/v3_h2_weighted_bce.yaml",
+        "configs/v3_head/v3_h3_focal_g2.yaml",
+        "configs/v3_head/v3_h4_focal_g1.yaml",
+        "configs/v3_head/v3_h5_focal_g2_noalpha.yaml",
+    ],
+)
+PIP_LINES["headctl"] = PIP_LINES["loss"]
+
+# Repeat runs of the headline configs with other seeds (P0 / P6 / L2); one kernel per seed.
+for _seed in (1337, 2024):
+    SUITES[f"seed{_seed}"] = (
+        f"Vòng 3 — lặp lại với seed {_seed}: P0, P6, L2",
+        [
+            f"configs/v3_seeds/v3_p0_custom_cls_bce_s{_seed}.yaml",
+            f"configs/v3_seeds/v3_p6_cleaner_weighted_attn_msd_s{_seed}.yaml",
+            f"configs/v3_seeds/v3_l2_weighted_bce_s{_seed}.yaml",
+        ],
+    )
+    PIP_LINES[f"seed{_seed}"] = PIP_LINES["loss"]
+
+BASE_SUITES = list(SUITES)
+
+# One notebook per config for CPU-only execution (used when the weekly GPU quota is exhausted). A single config per
+# kernel keeps each session far below Kaggle's 12-hour limit and lets the runs execute in parallel across accounts.
+CPU_SINGLE_KEYS = []
+for _suite, _prefix in (("loss", "cpu_"), ("technique", "cpu_"), ("d1_native", "gpu_")):
+    for _cfg in SUITES[_suite][1]:
+        _stem = Path(_cfg).stem  # e.g. v3_l1_bce
+        _key = _prefix + _stem[len("v3_"):]
+        SUITES[_key] = (f"Vòng 3 — {_stem} (một cấu hình)", [_cfg])
+        PIP_LINES[_key] = PIP_LINES[_suite]
+        CPU_SINGLE_KEYS.append(_key)
 
 
 def _make_cell(src: str, ctype: str = "code") -> dict:
@@ -77,6 +163,13 @@ def _project_zip_b64() -> str:
 
 def build_notebook(suite: str, smoke: bool, payload: str) -> Path:
     title, configs = SUITES[suite]
+    pip_line = PIP_LINES[suite]
+    env_note = (
+        "\n\nThis suite upgrades `transformers` to >=5.19 and installs torchvision/pillow for the d1-2B "
+        "remote code. Restart is not required; the next cell imports it fresh."
+        if suite == "d1_native"
+        else ""
+    )
     cells = [
         _make_cell(
             f"# {title}\n\n"
@@ -84,10 +177,11 @@ def build_notebook(suite: str, smoke: bool, payload: str) -> Path:
             "Runs the project package through `scripts/run.py`. Configs: "
             + ", ".join(f"`{c}`" for c in configs)
             + ".\n\nResults land in `/kaggle/working/tweet_topic_benchmark/outputs/<experiment>/` "
-            "(`metrics_summary.json`, `test_predictions.json`, `val_probabilities.json`).",
+            "(`metrics_summary.json`, `training_history.json`, `test_predictions.json`, `val_probabilities.json`)."
+            + env_note,
             "markdown",
         ),
-        _make_cell(PIP_LINE),
+        _make_cell(pip_line),
         _make_cell(
             "# Unpack the embedded project source\n"
             "import base64, io, zipfile, pathlib\n"
@@ -136,7 +230,7 @@ def build_notebook(suite: str, smoke: bool, payload: str) -> Path:
         "nbformat_minor": 4,
     }
     NOTEBOOKS_DIR.mkdir(parents=True, exist_ok=True)
-    dest = NOTEBOOKS_DIR / f"v2_{suite}{'_smoke' if smoke else ''}.ipynb"
+    dest = NOTEBOOKS_DIR / f"{PREFIX}_{suite}{'_smoke' if smoke else ''}.ipynb"
     dest.write_text(json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8")
     return dest
 
@@ -144,9 +238,11 @@ def build_notebook(suite: str, smoke: bool, payload: str) -> Path:
 def main() -> None:
     payload = _project_zip_b64()
     print(f"Embedded source payload: {len(payload) / 1024:.0f} KiB (base64)")
-    for suite in SUITES:
+    for suite in BASE_SUITES:
         for smoke in (True, False):
             print("Generated:", build_notebook(suite, smoke, payload))
+    for key in CPU_SINGLE_KEYS:
+        print("Generated:", build_notebook(key, False, payload))
 
 
 if __name__ == "__main__":
