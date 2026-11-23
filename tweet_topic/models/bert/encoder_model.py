@@ -31,9 +31,18 @@ from tweet_topic.core.base import BaseTopicClassifier
 from tweet_topic.core.registry import get_loss_fn, register_model
 from tweet_topic.data.taxonomy import NUM_CLASSES
 from tweet_topic.evaluation.metrics import compute_metrics
-from tweet_topic.evaluation.thresholding import calibrate_per_class_thresholds
+from tweet_topic.evaluation.thresholding import (
+    calibrate_global_threshold,
+    calibrate_per_class_thresholds,
+    calibrate_shrinkage_thresholds,
+)
 from tweet_topic.models._backbone import pool_tokens
-from tweet_topic.models.bert.pooling import AttentionPooling, MultiSampleDropoutHead, reduce_multisample_loss
+from tweet_topic.models.bert.pooling import (
+    AttentionPooling,
+    MultiSampleDropoutHead,
+    ResidualHybridPooling,
+    reduce_multisample_loss,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -86,16 +95,21 @@ class _PooledEncoder(nn.Module):
         msd_p: float = 0.2,
     ):
         super().__init__()
-        if pooling not in {"cls", "mean", "attention"}:
-            raise ValueError(f"Unknown pooling '{pooling}'. Choose cls | mean | attention.")
+        if pooling not in {"cls", "mean", "attention", "hybrid"}:
+            raise ValueError(f"Unknown pooling '{pooling}'. Choose cls | mean | attention | hybrid.")
         self.backbone = backbone
         self.pooling = pooling
-        self.pool = AttentionPooling(hidden_size, attn_dim) if pooling == "attention" else None
+        if pooling == "attention":
+            self.pool: Optional[nn.Module] = AttentionPooling(hidden_size, attn_dim)
+        elif pooling == "hybrid":
+            self.pool = ResidualHybridPooling(hidden_size, attn_dim)
+        else:
+            self.pool = None
         self.head = MultiSampleDropoutHead(hidden_size, num_classes, num_samples=msd_samples, dropout=msd_p)
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
         hidden = self.backbone(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        if self.pooling == "attention":
+        if self.pooling in {"attention", "hybrid"}:
             pooled, _ = self.pool(hidden, attention_mask)
         elif self.pooling == "mean":
             pooled = pool_tokens(hidden, attention_mask, "mean")
@@ -138,6 +152,9 @@ class TransformerEncoderClassifier(BaseTopicClassifier):
 
         self.history: List[Dict[str, Any]] = []
         self.best_epoch: Optional[int] = None
+
+        # Fix seed before initializing randomly-weighted pooling / classification heads
+        _set_seed(self.seed)
 
         # Pluggable loss function
         loss_type = config.get("loss_type", "bce")
@@ -210,13 +227,23 @@ class TransformerEncoderClassifier(BaseTopicClassifier):
         m05 = compute_metrics(y_true, (probs >= 0.5).astype(int))
         taus = calibrate_per_class_thresholds(y_true, probs)
         mtuned = compute_metrics(y_true, (probs >= taus[None, :]).astype(int))
+        tau_global, _ = calibrate_global_threshold(y_true, probs)
+        m_global = compute_metrics(y_true, (probs >= tau_global).astype(int))
+        taus_shrink = calibrate_shrinkage_thresholds(y_true, probs)
+        m_shrink = compute_metrics(y_true, (probs >= taus_shrink[None, :]).astype(int))
+        val_f1_balanced = round(0.5 * m_shrink["micro_f1"] + 0.5 * m_shrink["macro_f1"], 5)
         return {
             "val_loss": round(val_loss, 5),
             "val_bce_loss": round(val_bce, 5),
             "val_micro_f1_05": m05["micro_f1"],
             "val_macro_f1_05": m05["macro_f1"],
+            "val_micro_f1_global": m_global["micro_f1"],
+            "val_macro_f1_global": m_global["macro_f1"],
             "val_micro_f1_tuned": mtuned["micro_f1"],
             "val_macro_f1_tuned": mtuned["macro_f1"],
+            "val_micro_f1_shrinkage": m_shrink["micro_f1"],
+            "val_macro_f1_shrinkage": m_shrink["macro_f1"],
+            "val_f1_balanced": val_f1_balanced,
         }
 
     def fit(

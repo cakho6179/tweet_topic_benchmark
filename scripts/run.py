@@ -41,6 +41,7 @@ from tweet_topic.evaluation.selective import coverage_curve
 from tweet_topic.evaluation.thresholding import (
     calibrate_global_threshold,
     calibrate_per_class_thresholds,
+    calibrate_shrinkage_thresholds,
 )
 
 logging.basicConfig(
@@ -121,11 +122,25 @@ def main():
         logger.info("Temperature scaling (%s) fitted on validation.", temp_mode)
 
     # ---- thresholds ------------------------------------------------------------------------------------
-    calib_mode = cfg.get("threshold_mode", "global")  # "global" or "per_class"
-    if calib_mode == "per_class":
+    calib_mode = cfg.get("threshold_mode", "global")  # "fixed_05" | "global" | "per_class" | "shrinkage"
+    shrinkage_k = float(cfg.get("shrinkage_k", 20.0))
+    if calib_mode == "fixed_05":
+        thresholds = 0.5
+        model.set_thresholds(global_threshold=0.5)
+        logger.info("Fixed threshold 0.50 applied.")
+    elif calib_mode == "per_class":
         thresholds = calibrate_per_class_thresholds(y_val, val_probs)
         model.set_thresholds(per_class_thresholds=thresholds)
         logger.info("Per-class threshold calibration applied.")
+    elif calib_mode == "shrinkage":
+        thresholds = calibrate_shrinkage_thresholds(
+            y_val,
+            val_probs,
+            shrinkage_k=shrinkage_k,
+            global_criterion=cfg.get("criterion", "micro_f1"),
+        )
+        model.set_thresholds(per_class_thresholds=thresholds)
+        logger.info("Support-regularized shrinkage threshold calibration (k=%.1f) applied.", shrinkage_k)
     else:
         thresholds, _ = calibrate_global_threshold(y_val, val_probs, criterion=cfg.get("criterion", "micro_f1"))
         model.set_thresholds(global_threshold=thresholds)
@@ -134,17 +149,22 @@ def main():
     val_metrics = compute_metrics(y_val, binarize(val_probs, thresholds))
     logger.info("Validation -> Micro-F1: %.4f | Macro-F1: %.4f", val_metrics["micro_f1"], val_metrics["macro_f1"])
 
-    # Side-by-side threshold comparison (0.5 vs global tuned vs per-class tuned) from the same probabilities
+    # Side-by-side threshold comparison (0.5 vs global vs per-class vs shrinkage) from the same probabilities
     tau_global, _ = calibrate_global_threshold(y_val, val_probs, criterion=cfg.get("criterion", "micro_f1"))
     tau_per_class = calibrate_per_class_thresholds(y_val, val_probs)
+    tau_shrinkage = calibrate_shrinkage_thresholds(
+        y_val, val_probs, shrinkage_k=shrinkage_k, global_criterion=cfg.get("criterion", "micro_f1")
+    )
     threshold_comparison: Dict[str, Any] = {
         "validation": {
             "default_0.5": compute_metrics(y_val, binarize(val_probs, 0.5)),
             "global_tuned": compute_metrics(y_val, binarize(val_probs, tau_global)),
             "per_class_tuned": compute_metrics(y_val, binarize(val_probs, tau_per_class)),
+            "shrinkage_tuned": compute_metrics(y_val, binarize(val_probs, tau_shrinkage)),
         },
         "tau_global": round(float(tau_global), 4),
         "tau_per_class": np.atleast_1d(tau_per_class).round(4).tolist(),
+        "tau_shrinkage": np.atleast_1d(tau_shrinkage).round(4).tolist(),
     }
 
     # ---- test evaluation -------------------------------------------------------------------------------
@@ -159,6 +179,7 @@ def main():
             "default_0.5": compute_metrics(y_test, binarize(probs, 0.5)),
             "global_tuned": compute_metrics(y_test, binarize(probs, tau_global)),
             "per_class_tuned": compute_metrics(y_test, binarize(probs, tau_per_class)),
+            "shrinkage_tuned": compute_metrics(y_test, binarize(probs, tau_shrinkage)),
         }
         test_preds_dict[s_name] = {
             "ids": test_ids,

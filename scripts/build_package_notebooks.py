@@ -127,6 +127,40 @@ for _seed in (1337, 2024):
     )
     PIP_LINES[f"seed{_seed}"] = PIP_LINES["loss"]
 
+# V4 strict one-factor-at-a-time BERT suites (pure ASCII titles for Kaggle compatibility).
+SUITES["v4_ladder_a"] = (
+    "V4 - BERT Ladder A (10 epochs + Early Stopping): S0 Stock Head, S1 Custom Head, S2 Cleaner",
+    [
+        "configs/v4/v4_s0_stock_bce.yaml",
+        "configs/v4/v4_s1_custom_head_bce.yaml",
+        "configs/v4/v4_s2_cleaner_bce.yaml",
+    ],
+)
+SUITES["v4_ladder_b"] = (
+    "V4 - BERT Ladder B (10 epochs + Early Stopping): S3 Hybrid Pool + MSD, S4 Damped Weighted BCE",
+    [
+        "configs/v4/v4_s3_hybrid_pool_msd_bce.yaml",
+        "configs/v4/v4_s4_damped_wbce.yaml",
+    ],
+)
+SUITES["v4_loss_ctl"] = (
+    "V4 - BERT Controlled Loss Ablation on S3 Architecture: Naive W-BCE, Focal No-Alpha, ASL",
+    [
+        "configs/v4/v4_loss_naive_wbce.yaml",
+        "configs/v4/v4_loss_focal_noalpha.yaml",
+        "configs/v4/v4_loss_asl.yaml",
+    ],
+)
+SUITES["v4_seeds"] = (
+    "V4 - BERT Multi-Seed Reproducibility for S4: seed 1337 and seed 2024",
+    [
+        "configs/v4/v4_s4_damped_wbce_s1337.yaml",
+        "configs/v4/v4_s4_damped_wbce_s2024.yaml",
+    ],
+)
+for _v4k in ("v4_ladder_a", "v4_ladder_b", "v4_loss_ctl", "v4_seeds"):
+    PIP_LINES[_v4k] = PIP_LINES["loss"]
+
 BASE_SUITES = list(SUITES)
 
 # One notebook per config for CPU-only execution (used when the weekly GPU quota is exhausted). A single config per
@@ -230,8 +264,9 @@ def build_notebook(suite: str, smoke: bool, payload: str) -> Path:
         "nbformat_minor": 4,
     }
     NOTEBOOKS_DIR.mkdir(parents=True, exist_ok=True)
-    dest = NOTEBOOKS_DIR / f"{PREFIX}_{suite}{'_smoke' if smoke else ''}.ipynb"
-    dest.write_text(json.dumps(nb, indent=1, ensure_ascii=False), encoding="utf-8")
+    stem = suite if suite.startswith("v4_") else f"{PREFIX}_{suite}"
+    dest = NOTEBOOKS_DIR / f"{stem}{'_smoke' if smoke else ''}.ipynb"
+    dest.write_text(json.dumps(nb, indent=1, ensure_ascii=suite.startswith("v4_")), encoding="utf-8")
     return dest
 
 

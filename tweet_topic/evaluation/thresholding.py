@@ -61,3 +61,52 @@ def calibrate_per_class_thresholds(
         optimal_thresholds[c] = best_c_t
 
     return optimal_thresholds
+
+
+def calibrate_shrinkage_thresholds(
+    y_true: np.ndarray,
+    y_probs: np.ndarray,
+    shrinkage_k: float = 20.0,
+    global_criterion: str = "micro_f1",
+    search_range: Tuple[float, float, float] = (0.10, 0.85, 0.02),
+) -> np.ndarray:
+    """Support-regularized per-class thresholds shrunk toward the global optimum.
+
+    Prevents threshold overfitting on small validation sets by shrinking rare-class thresholds
+    toward ``tau_global`` proportional to validation positive support:
+        alpha_c = N_val_pos_c / (N_val_pos_c + shrinkage_k)
+        tau_c*  = alpha_c * tau_val_c + (1 - alpha_c) * tau_global
+    """
+    tau_global, _ = calibrate_global_threshold(
+        y_true,
+        y_probs,
+        search_range=search_range,
+        criterion=global_criterion,
+    )
+    n_classes = y_true.shape[1]
+    start, stop, step = search_range
+    grid = np.arange(start, stop + 1e-6, step)
+    shrunk_thresholds = np.full(n_classes, tau_global, dtype=float)
+
+    for c in range(n_classes):
+        n_pos = int(np.sum(y_true[:, c]))
+        if n_pos == 0:
+            shrunk_thresholds[c] = tau_global
+            continue
+
+        best_f1 = -1.0
+        best_c_t = tau_global
+        for t in grid:
+            t_val = float(t)
+            pred_c = (y_probs[:, c] >= t_val).astype(int)
+            f1 = float(f1_score(y_true[:, c], pred_c, zero_division=0))
+            if f1 > best_f1 + 1e-9:
+                best_f1 = f1
+                best_c_t = t_val
+            elif abs(f1 - best_f1) <= 1e-9 and abs(t_val - tau_global) < abs(best_c_t - tau_global):
+                best_c_t = t_val
+
+        alpha = float(n_pos) / float(n_pos + shrinkage_k)
+        shrunk_thresholds[c] = round(alpha * best_c_t + (1.0 - alpha) * tau_global, 4)
+
+    return shrunk_thresholds

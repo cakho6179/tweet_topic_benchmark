@@ -1,7 +1,4 @@
-"""Loss functions for Multi-Label Classification: BCE, Weighted BCE, and Focal Loss.
-
-Note: Asymmetric Loss (ASL) was cleared from active experiments and documented in ``doc/Future.md``.
-"""
+"""Loss functions for Multi-Label Classification: BCE, Damped Weighted BCE, Focal Loss, and Asymmetric Loss."""
 
 from __future__ import annotations
 
@@ -23,15 +20,17 @@ class StandardBCELoss(nn.Module):
 
 @register_loss("weighted_bce")
 class WeightedBCELoss(nn.Module):
-    """Class-balanced BCEWithLogitsLoss using per-class ``pos_weight = (N - N_pos) / N_pos``."""
+    """Class-balanced BCEWithLogitsLoss with configurable power-damping: ``((N - N_pos) / N_pos)^power``."""
 
     def __init__(
         self,
         pos_weight: Optional[Union[float, Sequence[float], torch.Tensor]] = None,
         pos_weight_max: float = 30.0,
+        power: float = 1.0,
     ):
         super().__init__()
         self.pos_weight_max = float(pos_weight_max)
+        self.power = float(power)
         if pos_weight is not None:
             pw = torch.as_tensor(pos_weight, dtype=torch.float32).clamp(min=1.0, max=self.pos_weight_max)
             self.register_buffer("pos_weight", pw)
@@ -42,7 +41,9 @@ class WeightedBCELoss(nn.Module):
         y = torch.as_tensor(train_labels, dtype=torch.float32)
         n_pos = y.sum(dim=0)
         n_neg = len(y) - n_pos
-        pw = (n_neg / n_pos.clamp(min=1.0)).clamp(min=1.0, max=self.pos_weight_max)
+        pw = torch.pow((n_neg / n_pos.clamp(min=1.0)).clamp(min=1.0), self.power).clamp(
+            min=1.0, max=self.pos_weight_max
+        )
         self.pos_weight = pw
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
@@ -70,3 +71,42 @@ class MultiLabelFocalLoss(nn.Module):
             focal_weight = alpha_t * focal_weight
 
         return (focal_weight * bce).mean()
+
+
+@register_loss("asymmetric")
+class AsymmetricLoss(nn.Module):
+    """Asymmetric Loss with probability margin shifting (Ridnik / Ben-Baruch et al., ICCV 2021)."""
+
+    def __init__(
+        self,
+        gamma_neg: float = 2.0,
+        gamma_pos: float = 0.0,
+        clip: float = 0.05,
+        eps: float = 1e-8,
+    ):
+        super().__init__()
+        self.gamma_neg = float(gamma_neg)
+        self.gamma_pos = float(gamma_pos)
+        self.clip = float(clip)
+        self.eps = float(eps)
+
+    def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
+        probs = torch.sigmoid(logits)
+        probs_pos = probs.clamp(min=self.eps, max=1.0 - self.eps)
+        # Shift negative probability: 1 - max(p - clip, 0) = min(1 - p + clip, 1)
+        probs_neg = 1.0 - probs_pos
+        if self.clip is not None and self.clip > 0:
+            probs_neg = (probs_neg + self.clip).clamp(max=1.0)
+
+        loss_pos = targets * torch.log(probs_pos)
+        loss_neg = (1.0 - targets) * torch.log(probs_neg.clamp(min=self.eps))
+        loss = loss_pos + loss_neg
+
+        if self.gamma_neg > 0 or self.gamma_pos > 0:
+            with torch.no_grad():
+                pt = probs_pos * targets + probs_neg * (1.0 - targets)
+                gamma = self.gamma_pos * targets + self.gamma_neg * (1.0 - targets)
+                focal_w = torch.pow((1.0 - pt).clamp(min=0.0), gamma)
+            loss = loss * focal_w
+
+        return -loss.mean()

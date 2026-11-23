@@ -34,6 +34,7 @@ _LOSS_MODULE_MAP = {
     "bce": "tweet_topic.models.bert.losses",
     "weighted_bce": "tweet_topic.models.bert.losses",
     "focal": "tweet_topic.models.bert.losses",
+    "asymmetric": "tweet_topic.models.bert.losses",
 }
 
 

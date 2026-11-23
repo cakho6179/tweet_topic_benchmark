@@ -22,6 +22,8 @@ from typing import Callable, Optional, Sequence, Tuple, Union
 import torch
 import torch.nn as nn
 
+from tweet_topic.models._backbone import pool_tokens
+
 
 class AttentionPooling(nn.Module):
     """Additive attention pooling.
@@ -43,6 +45,30 @@ class AttentionPooling(nn.Module):
         alpha = torch.softmax(scores, dim=-1)
         pooled = torch.sum(alpha.unsqueeze(-1) * hidden, dim=1)
         return pooled, alpha
+
+
+class ResidualHybridPooling(nn.Module):
+    """Residual fusion of [CLS], Masked Mean Pooling, and Learned Attention Pooling with LayerNorm.
+
+    h_hybrid = LayerNorm(h_cls + w_mean * h_mean + w_attn * h_attn)
+    Preserves pretrained [CLS] knowledge while harvesting dispersed multi-topic signals across the tweet.
+    """
+
+    def __init__(self, hidden_size: int, attn_dim: int = 256):
+        super().__init__()
+        self.attn_pool = AttentionPooling(hidden_size, attn_dim)
+        self.w_mean = nn.Parameter(torch.tensor(0.5))
+        self.w_attn = nn.Parameter(torch.tensor(0.5))
+        self.norm = nn.LayerNorm(hidden_size)
+
+    def forward(
+        self, hidden: torch.Tensor, attention_mask: Optional[torch.Tensor] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        h_cls = hidden[:, 0, :]
+        h_mean = pool_tokens(hidden, attention_mask, "mean")
+        h_attn, alpha = self.attn_pool(hidden, attention_mask)
+        fused = h_cls + self.w_mean * h_mean + self.w_attn * h_attn
+        return self.norm(fused), alpha
 
 
 class MultiSampleDropoutHead(nn.Module):
