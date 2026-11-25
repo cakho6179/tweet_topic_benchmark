@@ -158,7 +158,30 @@ SUITES["v4_seeds"] = (
         "configs/v4/v4_s4_damped_wbce_s2024.yaml",
     ],
 )
-for _v4k in ("v4_ladder_a", "v4_ladder_b", "v4_loss_ctl", "v4_seeds"):
+SUITES["v4_valfix"] = (
+    "V4 - Validation-Only Error-Driven Fix Suite (ZERO Test Leakage): ValFix-2B and ValFix-2A",
+    [
+        "configs/v4/v4_s4_valfix_2b.yaml",
+        "configs/v4/v4_s4_valfix_2a.yaml",
+    ],
+)
+SUITES["v5_15ep_a"] = (
+    "V5 - 15 Epochs + Adaptive LR Reduction (ReduceLROnPlateau) Ladder A: S0, S1, S2",
+    [
+        "configs/v5_15ep/v5_s0_stock_bce_15ep.yaml",
+        "configs/v5_15ep/v5_s1_custom_head_bce_15ep.yaml",
+        "configs/v5_15ep/v5_s2_cleaner_bce_15ep.yaml",
+    ],
+)
+SUITES["v5_15ep_b"] = (
+    "V5 - 15 Epochs + Adaptive LR Reduction (ReduceLROnPlateau & LLRD) Ladder B: S3, S4, S4+LLRD",
+    [
+        "configs/v5_15ep/v5_s3_hybrid_pool_msd_bce_15ep.yaml",
+        "configs/v5_15ep/v5_s4_damped_wbce_15ep.yaml",
+        "configs/v5_15ep/v5_s4_damped_wbce_15ep_llrd.yaml",
+    ],
+)
+for _v4k in ("v4_ladder_a", "v4_ladder_b", "v4_loss_ctl", "v4_seeds", "v4_valfix", "v5_15ep_a", "v5_15ep_b"):
     PIP_LINES[_v4k] = PIP_LINES["loss"]
 
 BASE_SUITES = list(SUITES)
@@ -249,7 +272,10 @@ def build_notebook(suite: str, smoke: bool, payload: str) -> Path:
             "for p in sorted((ROOT / 'outputs').glob('*/metrics_summary.json')):\n"
             "    s = json.loads(p.read_text())\n"
             "    print(s['experiment_name'])\n"
-            "    for split, m in s['test_metrics'].items():\n"
+            "    vm = s.get('validation_metrics', {})\n"
+            "    if vm:\n"
+            "        print(f\"  validation: micro-F1 {vm['micro_f1']:.4f} | macro-F1 {vm['macro_f1']:.4f} | exact {vm['exact_match_ratio']:.4f}\")\n"
+            "    for split, m in s.get('test_metrics', {}).items():\n"
             "        print(f\"  {split}: micro-F1 {m['micro_f1']:.4f} | macro-F1 {m['macro_f1']:.4f} | exact {m['exact_match_ratio']:.4f}\")"
         ),
     ]
@@ -264,9 +290,9 @@ def build_notebook(suite: str, smoke: bool, payload: str) -> Path:
         "nbformat_minor": 4,
     }
     NOTEBOOKS_DIR.mkdir(parents=True, exist_ok=True)
-    stem = suite if suite.startswith("v4_") else f"{PREFIX}_{suite}"
+    stem = suite if suite.startswith(("v4_", "v5_")) else f"{PREFIX}_{suite}"
     dest = NOTEBOOKS_DIR / f"{stem}{'_smoke' if smoke else ''}.ipynb"
-    dest.write_text(json.dumps(nb, indent=1, ensure_ascii=suite.startswith("v4_")), encoding="utf-8")
+    dest.write_text(json.dumps(nb, indent=1, ensure_ascii=suite.startswith(("v4_", "v5_"))), encoding="utf-8")
     return dest
 
 

@@ -72,6 +72,11 @@ KERNELS_SPEC = {
 #   --kernels kernel_v3_loss,kernel_v3_technique,kernel_v3_d1_native
 # Only acc1-acc3 exist in ~/.kaggle_accounts; each account can run at most 2 GPU sessions at once.
 _PACKAGE_SUITE_ACCOUNTS = {
+    # Vòng 5 — 15 epochs + LR reduction (ReduceLROnPlateau & LLRD) full S0 -> S4 rerun on Kaggle GPU.
+    "v5_15ep_a": ("15ep_a", "acc6", "v5"),
+    "v5_15ep_b": ("15ep_b", "acc7", "v5"),
+    # Vòng 4 — validation-only error-driven fix suite.
+    "v4_valfix": ("valfix", "acc5", "v4"),
     # Vòng 3 — one suite per account, each suite runs its configs sequentially.
     "v3_loss": ("loss", "acc1", "v3"),
     "v3_technique": ("technique", "acc2", "v3"),
@@ -181,12 +186,14 @@ def prepare_kernels(accounts_pool: Dict[str, Any], single_user: Optional[str] = 
             "code_file": "notebook.ipynb",
             "language": "python",
             "kernel_type": "notebook",
-            "is_gpu": spec["is_gpu"],
+            "is_private": True,
             "enable_gpu": spec["is_gpu"],
+            "enable_tpu": False,
             "enable_internet": True,
             "dataset_sources": [],
             "competition_sources": [],
             "kernel_sources": [],
+            "model_sources": [],
         }
 
         meta_path = k_dir / "kernel-metadata.json"

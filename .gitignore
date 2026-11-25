@@ -67,8 +67,11 @@ desktop.ini
 *.joblib
 *.pkl
 
-# Project-specific ignored folders & files
-/configs/
+# Local agent rules & personal notes
+AGENTS.md
+/learning/
+
+# Generated / local-only runtime folders
 /data/
 /kaggle/
 /kaggle_jobs.json
@@ -79,3 +82,14 @@ desktop.ini
 /tmp/
 /scratch/
 *.log
+
+# Legacy experiment configs (keep only active ml/, v4/, v5_15ep/ tracked)
+/configs/0*.yaml
+/configs/bert/
+/configs/d1_liquid/
+/configs/qwen_llm/
+/configs/v2/
+/configs/v3/
+/configs/v3_head/
+/configs/v3_seeds/
+/configs/ml/classifier_chains.yaml

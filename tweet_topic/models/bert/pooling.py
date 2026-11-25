@@ -106,3 +106,37 @@ def reduce_multisample_loss(
     if logits.dim() == 3:
         return torch.stack([criterion(branch, labels) for branch in logits], dim=0).mean()
     return criterion(logits, labels)
+
+
+class LayerWeightedFusion(nn.Module):
+    """Learns softmax weights over the top-k Transformer hidden layers."""
+
+    def __init__(self, num_layers: int = 4):
+        super().__init__()
+        self.num_layers = int(num_layers)
+        self.layer_logits = nn.Parameter(torch.zeros(self.num_layers))
+
+    def forward(self, hidden_states: Sequence[torch.Tensor]) -> torch.Tensor:
+        layers = hidden_states[-self.num_layers :]
+        weights = torch.softmax(self.layer_logits, dim=0)
+        stacked = torch.stack(layers, dim=0)
+        return torch.sum(weights.view(-1, 1, 1, 1) * stacked, dim=0)
+
+
+class ResidualLabelInteractionHead(nn.Module):
+    """Refines independent logits with a zero-initialized residual label-correlation MLP."""
+
+    def __init__(self, num_classes: int = 19, hidden_dim: int = 64, dropout: float = 0.1):
+        super().__init__()
+        self.norm = nn.LayerNorm(num_classes)
+        self.fc1 = nn.Linear(num_classes, hidden_dim)
+        self.act = nn.GELU()
+        self.drop = nn.Dropout(float(dropout))
+        self.fc2 = nn.Linear(hidden_dim, num_classes)
+        nn.init.zeros_(self.fc2.weight)
+        nn.init.zeros_(self.fc2.bias)
+        self.gamma = nn.Parameter(torch.tensor(0.2))
+
+    def forward(self, logits: torch.Tensor) -> torch.Tensor:
+        delta = self.fc2(self.drop(self.act(self.fc1(self.norm(logits)))))
+        return logits + self.gamma * delta

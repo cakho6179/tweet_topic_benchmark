@@ -1,0 +1,24 @@
+experiment_name: "ml_linear_ovr"
+output_dir: "./outputs/ml_linear_ovr"
+threshold_mode: "global"
+criterion: "micro_f1"
+
+data:
+  dataset_name: "cardiffnlp/tweet_topic_multi"
+  train_split: "train_2020"
+  val_split: "validation_2020"
+  test_splits:
+    - "test_2020"
+    - "test_2021"
+  max_train_samples: null
+  max_eval_samples: null
+
+model:
+  model_type: "ml_linear_ovr"
+  word_ngram_range: [1, 2]
+  char_ngram_range: [3, 5]
+  max_features_word: 40000
+  max_features_char: 60000
+  c_param: 2.0
+  class_weight: "balanced"
+  n_jobs: 1

@@ -1,0 +1,44 @@
+experiment_name: v4_s4_valfix_2b
+output_dir: ./outputs/v4_s4_valfix_2b
+threshold_mode: global
+criterion: micro_f1
+shrinkage_k: 20.0
+empty_fallback: true
+calibration_report: true
+data:
+  dataset_name: cardiffnlp/tweet_topic_multi
+  train_split: train_2020
+  val_split: validation_2020
+  test_splits: []
+model:
+  model_type: bert_encoder
+  model_name: bert-base-uncased
+  max_length: 128
+  batch_size: 32
+  eval_batch_size: 64
+  epochs: 10
+  lr: 2.0e-05
+  head_lr: 0.0005
+  weight_decay: 0.01
+  warmup_ratio: 0.1
+  scheduler: cosine
+  grad_clip: 1.0
+  seed: 42
+  save_best: true
+  select_metric: val_f1_balanced
+  early_stopping_patience: 3
+  msd_p: 0.2
+  loss_type: weighted_bce
+  loss_params:
+    power: 0.5
+    pos_weight_max: 6.0
+    label_smoothing: 0.0
+  pooling: hybrid
+  msd_samples: 5
+  force_custom_head: true
+  attn_dim: 256
+  use_last4_layers: true
+  label_interaction: true
+  label_hidden_dim: 64
+  label_dropout: 0.1
+preprocessor: tweet_text_cleaner_v2

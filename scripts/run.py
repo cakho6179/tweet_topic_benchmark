@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict
@@ -39,6 +40,7 @@ from tweet_topic.evaluation.calibration import (
 from tweet_topic.evaluation.metrics import compute_metrics
 from tweet_topic.evaluation.selective import coverage_curve
 from tweet_topic.evaluation.thresholding import (
+    apply_empty_fallback,
     calibrate_global_threshold,
     calibrate_per_class_thresholds,
     calibrate_shrinkage_thresholds,
@@ -51,14 +53,30 @@ logging.basicConfig(
 logger = logging.getLogger("tweet_topic_runner")
 
 
+def _enforce_kaggle_only_training() -> None:
+    """Aborts immediately if scripts/run.py is invoked outside a Kaggle runtime."""
+    in_kaggle = bool(
+        os.environ.get("KAGGLE_KERNEL_RUN_TYPE")
+        or os.environ.get("KAGGLE_URL_BASE")
+        or Path("/kaggle/working").exists()
+    )
+    if not in_kaggle:
+        raise RuntimeError(
+            "LOCAL TRAINING IS FORBIDDEN! All model training MUST run exclusively on Kaggle."
+        )
+
+
 def load_yaml(path: str) -> Dict[str, Any]:
     with open(path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 
-def binarize(probs: np.ndarray, thresholds) -> np.ndarray:
+def binarize(probs: np.ndarray, thresholds, empty_fallback: bool = False) -> np.ndarray:
     t = np.asarray(thresholds, dtype=float)
-    return (probs >= (t[None, :] if t.ndim else t)).astype(int)
+    preds = (probs >= (t[None, :] if t.ndim else t)).astype(int)
+    if empty_fallback:
+        preds = apply_empty_fallback(preds, probs)
+    return preds
 
 
 def main():
@@ -66,6 +84,7 @@ def main():
     parser.add_argument("--config", type=str, required=True, help="Path to config YAML")
     parser.add_argument("--smoke", action="store_true", help="Quick smoke test mode")
     args = parser.parse_args()
+    _enforce_kaggle_only_training()
 
     cfg = load_yaml(args.config)
     exp_name = cfg.get("experiment_name", "experiment")
@@ -146,8 +165,14 @@ def main():
         model.set_thresholds(global_threshold=thresholds)
         logger.info("Optimal global threshold: %.2f", thresholds)
 
-    val_metrics = compute_metrics(y_val, binarize(val_probs, thresholds))
-    logger.info("Validation -> Micro-F1: %.4f | Macro-F1: %.4f", val_metrics["micro_f1"], val_metrics["macro_f1"])
+    empty_fallback = bool(cfg.get("empty_fallback", False))
+    val_metrics = compute_metrics(y_val, binarize(val_probs, thresholds, empty_fallback=empty_fallback))
+    logger.info(
+        "Validation -> Micro-F1: %.4f | Macro-F1: %.4f | Exact Match: %.4f",
+        val_metrics["micro_f1"],
+        val_metrics["macro_f1"],
+        val_metrics["exact_match_ratio"],
+    )
 
     # Side-by-side threshold comparison (0.5 vs global vs per-class vs shrinkage) from the same probabilities
     tau_global, _ = calibrate_global_threshold(y_val, val_probs, criterion=cfg.get("criterion", "micro_f1"))
@@ -157,10 +182,10 @@ def main():
     )
     threshold_comparison: Dict[str, Any] = {
         "validation": {
-            "default_0.5": compute_metrics(y_val, binarize(val_probs, 0.5)),
-            "global_tuned": compute_metrics(y_val, binarize(val_probs, tau_global)),
-            "per_class_tuned": compute_metrics(y_val, binarize(val_probs, tau_per_class)),
-            "shrinkage_tuned": compute_metrics(y_val, binarize(val_probs, tau_shrinkage)),
+            "default_0.5": compute_metrics(y_val, binarize(val_probs, 0.5, empty_fallback=empty_fallback)),
+            "global_tuned": compute_metrics(y_val, binarize(val_probs, tau_global, empty_fallback=empty_fallback)),
+            "per_class_tuned": compute_metrics(y_val, binarize(val_probs, tau_per_class, empty_fallback=empty_fallback)),
+            "shrinkage_tuned": compute_metrics(y_val, binarize(val_probs, tau_shrinkage, empty_fallback=empty_fallback)),
         },
         "tau_global": round(float(tau_global), 4),
         "tau_per_class": np.atleast_1d(tau_per_class).round(4).tolist(),
@@ -172,14 +197,14 @@ def main():
     test_preds_dict: Dict[str, Any] = {}
     for s_name, (test_texts, y_test, test_ids) in test_splits_data.items():
         probs = test_probs[s_name]
-        preds = binarize(probs, thresholds)
+        preds = binarize(probs, thresholds, empty_fallback=empty_fallback)
         metrics = compute_metrics(y_test, preds)
         test_results[s_name] = metrics
         threshold_comparison[s_name] = {
-            "default_0.5": compute_metrics(y_test, binarize(probs, 0.5)),
-            "global_tuned": compute_metrics(y_test, binarize(probs, tau_global)),
-            "per_class_tuned": compute_metrics(y_test, binarize(probs, tau_per_class)),
-            "shrinkage_tuned": compute_metrics(y_test, binarize(probs, tau_shrinkage)),
+            "default_0.5": compute_metrics(y_test, binarize(probs, 0.5, empty_fallback=empty_fallback)),
+            "global_tuned": compute_metrics(y_test, binarize(probs, tau_global, empty_fallback=empty_fallback)),
+            "per_class_tuned": compute_metrics(y_test, binarize(probs, tau_per_class, empty_fallback=empty_fallback)),
+            "shrinkage_tuned": compute_metrics(y_test, binarize(probs, tau_shrinkage, empty_fallback=empty_fallback)),
         }
         test_preds_dict[s_name] = {
             "ids": test_ids,
@@ -274,7 +299,7 @@ def main():
     print("\n" + "=" * 65)
     print(f"BENCHMARK COMPLETE: {exp_name}")
     print("=" * 65)
-    print(f"Val Micro-F1: {val_metrics['micro_f1']:.4f} | Val Macro-F1: {val_metrics['macro_f1']:.4f}")
+    print(f"Val Micro-F1: {val_metrics['micro_f1']:.4f} | Val Macro-F1: {val_metrics['macro_f1']:.4f} | Val Exact: {val_metrics['exact_match_ratio']:.4f}")
     for s_name, m in test_results.items():
         print(f"[{s_name.upper()}] Micro-F1: {m['micro_f1']:.4f} | Macro-F1: {m['macro_f1']:.4f} | Exact Match: {m['exact_match_ratio']:.4f}")
     print("=" * 65 + "\n")

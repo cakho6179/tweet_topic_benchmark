@@ -27,10 +27,12 @@ class WeightedBCELoss(nn.Module):
         pos_weight: Optional[Union[float, Sequence[float], torch.Tensor]] = None,
         pos_weight_max: float = 30.0,
         power: float = 1.0,
+        label_smoothing: float = 0.0,
     ):
         super().__init__()
         self.pos_weight_max = float(pos_weight_max)
         self.power = float(power)
+        self.label_smoothing = float(label_smoothing)
         if pos_weight is not None:
             pw = torch.as_tensor(pos_weight, dtype=torch.float32).clamp(min=1.0, max=self.pos_weight_max)
             self.register_buffer("pos_weight", pw)
@@ -48,7 +50,8 @@ class WeightedBCELoss(nn.Module):
 
     def forward(self, logits: torch.Tensor, targets: torch.Tensor) -> torch.Tensor:
         pw = self.pos_weight.to(logits.device) if self.pos_weight is not None else None
-        return nn.functional.binary_cross_entropy_with_logits(logits, targets, pos_weight=pw)
+        targets_eff = targets * (1.0 - self.label_smoothing) if self.label_smoothing > 0 else targets
+        return nn.functional.binary_cross_entropy_with_logits(logits, targets_eff, pos_weight=pw)
 
 
 @register_loss("focal")

@@ -1,0 +1,45 @@
+experiment_name: v5_s4_damped_wbce_15ep
+output_dir: ./outputs/v5_s4_damped_wbce_15ep
+threshold_mode: global
+criterion: micro_f1
+shrinkage_k: 20.0
+calibration_report: true
+selective:
+  mode: margin
+  coverages: [1.0, 0.9, 0.8, 0.7, 0.6, 0.5]
+data:
+  dataset_name: cardiffnlp/tweet_topic_multi
+  train_split: train_2020
+  val_split: validation_2020
+  test_splits: [test_2020, test_2021]
+model:
+  model_type: bert_encoder
+  model_name: bert-base-uncased
+  max_length: 128
+  batch_size: 32
+  eval_batch_size: 64
+  epochs: 15
+  lr: 2.0e-05
+  head_lr: 0.0005
+  weight_decay: 0.01
+  warmup_ratio: 0.08
+  scheduler: plateau
+  lr_decay_factor: 0.5
+  lr_patience: 1
+  min_lr: 1.0e-07
+  llrd: 1.0
+  grad_clip: 1.0
+  seed: 42
+  save_best: true
+  select_metric: val_f1_balanced
+  early_stopping_patience: 6
+  msd_p: 0.2
+  loss_type: weighted_bce
+  loss_params:
+    power: 0.5
+    pos_weight_max: 6.0
+  pooling: hybrid
+  msd_samples: 5
+  force_custom_head: true
+  attn_dim: 256
+preprocessor: tweet_text_cleaner

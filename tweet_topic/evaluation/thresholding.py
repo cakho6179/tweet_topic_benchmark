@@ -110,3 +110,12 @@ def calibrate_shrinkage_thresholds(
         shrunk_thresholds[c] = round(alpha * best_c_t + (1.0 - alpha) * tau_global, 4)
 
     return shrunk_thresholds
+
+
+def apply_empty_fallback(preds: np.ndarray, probs: np.ndarray) -> np.ndarray:
+    """Guarantees every tweet receives at least its Top-1 highest-probability topic."""
+    out = preds.copy()
+    empty_rows = np.where(out.sum(axis=1) == 0)[0]
+    for i in empty_rows:
+        out[i, int(np.argmax(probs[i]))] = 1
+    return out

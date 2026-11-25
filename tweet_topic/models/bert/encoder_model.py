@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
@@ -39,8 +40,10 @@ from tweet_topic.evaluation.thresholding import (
 from tweet_topic.models._backbone import pool_tokens
 from tweet_topic.models.bert.pooling import (
     AttentionPooling,
+    LayerWeightedFusion,
     MultiSampleDropoutHead,
     ResidualHybridPooling,
+    ResidualLabelInteractionHead,
     reduce_multisample_loss,
 )
 
@@ -82,7 +85,7 @@ class _TorchTweetDataset(Dataset):
 
 
 class _PooledEncoder(nn.Module):
-    """Encoder backbone + configurable pooling + Multi-Sample-Dropout head."""
+    """Encoder backbone + optional top-4 layer fusion + configurable pooling + MSD + optional label interaction."""
 
     def __init__(
         self,
@@ -93,12 +96,18 @@ class _PooledEncoder(nn.Module):
         attn_dim: int = 256,
         msd_samples: int = 5,
         msd_p: float = 0.2,
+        use_last4_layers: bool = False,
+        label_interaction: bool = False,
+        label_hidden_dim: int = 64,
+        label_dropout: float = 0.1,
     ):
         super().__init__()
         if pooling not in {"cls", "mean", "attention", "hybrid"}:
             raise ValueError(f"Unknown pooling '{pooling}'. Choose cls | mean | attention | hybrid.")
         self.backbone = backbone
         self.pooling = pooling
+        self.use_last4_layers = bool(use_last4_layers)
+        self.layer_fusion: Optional[nn.Module] = LayerWeightedFusion(4) if self.use_last4_layers else None
         if pooling == "attention":
             self.pool: Optional[nn.Module] = AttentionPooling(hidden_size, attn_dim)
         elif pooling == "hybrid":
@@ -106,16 +115,28 @@ class _PooledEncoder(nn.Module):
         else:
             self.pool = None
         self.head = MultiSampleDropoutHead(hidden_size, num_classes, num_samples=msd_samples, dropout=msd_p)
+        self.label_refine: Optional[nn.Module] = (
+            ResidualLabelInteractionHead(num_classes, hidden_dim=label_hidden_dim, dropout=label_dropout)
+            if label_interaction
+            else None
+        )
 
     def forward(self, input_ids: torch.Tensor, attention_mask: torch.Tensor) -> torch.Tensor:
-        hidden = self.backbone(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        if self.use_last4_layers:
+            out = self.backbone(input_ids=input_ids, attention_mask=attention_mask, output_hidden_states=True)
+            hidden = self.layer_fusion(out.hidden_states)
+        else:
+            hidden = self.backbone(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
         if self.pooling in {"attention", "hybrid"}:
             pooled, _ = self.pool(hidden, attention_mask)
         elif self.pooling == "mean":
             pooled = pool_tokens(hidden, attention_mask, "mean")
         else:
             pooled = hidden[:, 0, :]
-        return self.head(pooled)
+        logits = self.head(pooled)
+        if self.label_refine is not None:
+            logits = self.label_refine(logits)
+        return logits
 
 
 @register_model("bert_encoder")
@@ -134,12 +155,20 @@ class TransformerEncoderClassifier(BaseTopicClassifier):
         self.head_lr = float(config.get("head_lr", self.lr))
         self.weight_decay = float(config.get("weight_decay", 0.01))
         self.warmup_ratio = float(config.get("warmup_ratio", 0.1))
-        self.scheduler_type = config.get("scheduler", "linear")  # linear | cosine
+        self.scheduler_type = config.get("scheduler", "linear")  # linear | cosine | plateau
+        self.lr_decay_factor = float(config.get("lr_decay_factor", 0.5))
+        self.lr_patience = int(config.get("lr_patience", 1))
+        self.min_lr = float(config.get("min_lr", 1e-7))
+        self.llrd = float(config.get("llrd", 1.0))  # Layer-wise LR decay (<1.0 enables LLRD across BERT layers)
         self.grad_clip = float(config.get("grad_clip", 1.0))
         self.pooling = config.get("pooling", "cls")
         self.msd_samples = int(config.get("msd_samples", 1))
         self.msd_p = float(config.get("msd_p", 0.2))
         self.attn_dim = int(config.get("attn_dim", 256))
+        self.use_last4_layers = bool(config.get("use_last4_layers", False))
+        self.label_interaction = bool(config.get("label_interaction", False))
+        self.label_hidden_dim = int(config.get("label_hidden_dim", 64))
+        self.label_dropout = float(config.get("label_dropout", 0.1))
         # Ablation control: keep the custom pooling/MSD head even for CLS + one branch, so that
         # pooling comparisons share exactly the same classifier head.
         self.force_custom_head = bool(config.get("force_custom_head", False))
@@ -177,9 +206,18 @@ class TransformerEncoderClassifier(BaseTopicClassifier):
                 attn_dim=self.attn_dim,
                 msd_samples=self.msd_samples,
                 msd_p=self.msd_p,
+                use_last4_layers=self.use_last4_layers,
+                label_interaction=self.label_interaction,
+                label_hidden_dim=self.label_hidden_dim,
+                label_dropout=self.label_dropout,
             ).to(self.device)
             logger.info(
-                "Custom head: pooling=%s, msd_samples=%d, msd_p=%.2f", self.pooling, self.msd_samples, self.msd_p
+                "Custom head: pooling=%s, msd_samples=%d, msd_p=%.2f, last4=%s, label_interact=%s",
+                self.pooling,
+                self.msd_samples,
+                self.msd_p,
+                self.use_last4_layers,
+                self.label_interaction,
             )
         else:
             model_config = AutoConfig.from_pretrained(
@@ -197,15 +235,61 @@ class TransformerEncoderClassifier(BaseTopicClassifier):
         return out if torch.is_tensor(out) else out.logits
 
     def _param_groups(self) -> List[Dict[str, Any]]:
-        """Gives freshly-initialised head parameters their own (usually larger) learning rate."""
-        if not self.custom_head:
+        """Gives freshly-initialised head parameters their own LR and optionally applies LLRD across encoder layers."""
+        if not self.custom_head and self.llrd >= 1.0:
             return [{"params": list(self.model.parameters()), "lr": self.lr}]
-        head_params = list(self.model.head.parameters())
-        if self.model.pool is not None:
-            head_params += list(self.model.pool.parameters())
+
+        if self.custom_head:
+            head_params = list(self.model.head.parameters())
+            if self.model.pool is not None:
+                head_params += list(self.model.pool.parameters())
+            if self.model.layer_fusion is not None:
+                head_params += list(self.model.layer_fusion.parameters())
+            if self.model.label_refine is not None:
+                head_params += list(self.model.label_refine.parameters())
+        else:
+            head_params = list(self.model.classifier.parameters()) if hasattr(self.model, "classifier") else []
+
         head_ids = {id(p) for p in head_params}
-        body = [p for p in self.model.parameters() if id(p) not in head_ids]
-        return [{"params": body, "lr": self.lr}, {"params": head_params, "lr": self.head_lr}]
+
+        if self.llrd >= 1.0:
+            body = [p for p in self.model.parameters() if id(p) not in head_ids]
+            return [{"params": body, "lr": self.lr}, {"params": head_params, "lr": self.head_lr}]
+
+        # Layer-Wise Learning Rate Decay (Sun et al., CCL 2019): top encoder layer uses self.lr,
+        # lower layers decay exponentially as self.lr * (llrd ** (num_layers - 1 - layer_idx)).
+        cfg_obj = getattr(self.model, "backbone", self.model).config
+        num_layers = int(getattr(cfg_obj, "num_hidden_layers", 12))
+        buckets: Dict[float, List[torch.nn.Parameter]] = {}
+        for name, param in self.model.named_parameters():
+            if id(param) in head_ids:
+                continue
+            m = re.search(r"encoder\.layer\.(\d+)\.", name)
+            if m:
+                layer_idx = int(m.group(1))
+                depth = max(0, num_layers - 1 - layer_idx)
+                pg_lr = self.lr * (self.llrd ** depth)
+            elif "embeddings" in name:
+                pg_lr = self.lr * (self.llrd ** num_layers)
+            else:
+                pg_lr = self.lr
+            buckets.setdefault(pg_lr, []).append(param)
+
+        groups: List[Dict[str, Any]] = [{"params": buckets[k], "lr": k} for k in sorted(buckets)]
+        if head_params:
+            groups.append({"params": head_params, "lr": self.head_lr})
+        total_grouped = sum(len(g["params"]) for g in groups)
+        total_model = sum(1 for _ in self.model.parameters())
+        assert total_grouped == total_model, f"LLRD param mismatch: {total_grouped} != {total_model}"
+        logger.info(
+            "Enabled Layer-Wise LR Decay (llrd=%.2f): %d param groups (emb_lr=%.2e -> top_lr=%.2e, head_lr=%.2e).",
+            self.llrd,
+            len(groups),
+            groups[0]["lr"],
+            self.lr,
+            self.head_lr,
+        )
+        return groups
 
     @torch.no_grad()
     def _eval_loader(self, loader: DataLoader, y_true: np.ndarray) -> Dict[str, Any]:
@@ -277,16 +361,40 @@ class TransformerEncoderClassifier(BaseTopicClassifier):
         steps_per_epoch = max(1, (len(train_loader) + self.grad_accum - 1) // self.grad_accum)
         total_steps = steps_per_epoch * self.epochs
         warmup_steps = int(total_steps * self.warmup_ratio)
-        if self.scheduler_type == "cosine":
+        minimise = self.select_metric in {"val_loss", "val_bce_loss"}
+
+        plateau_scheduler = None
+        scheduler = None
+        base_lrs = [pg["lr"] for pg in optimizer.param_groups]
+        if self.scheduler_type == "plateau":
+            warmup_steps = max(1, warmup_steps)
+            plateau_scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(
+                optimizer,
+                mode="min" if minimise else "max",
+                factor=self.lr_decay_factor,
+                patience=self.lr_patience,
+                threshold=1e-4,
+                min_lr=self.min_lr,
+            )
+            for pg, blr in zip(optimizer.param_groups, base_lrs):
+                pg["lr"] = blr / warmup_steps
+            logger.info(
+                "Using Warmup (%d steps) + ReduceLROnPlateau (factor=%.2f, patience=%d, min_lr=%.1e).",
+                warmup_steps,
+                self.lr_decay_factor,
+                self.lr_patience,
+                self.min_lr,
+            )
+        elif self.scheduler_type == "cosine":
             scheduler = get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps)
         else:
             scheduler = get_linear_schedule_with_warmup(optimizer, warmup_steps, total_steps)
         scaler = torch.amp.GradScaler("cuda", enabled=(self.device.type == "cuda"))
 
-        minimise = self.select_metric in {"val_loss", "val_bce_loss"}
         best_score = float("inf") if minimise else float("-inf")
         best_state: Optional[Dict[str, torch.Tensor]] = None
         bad_epochs = 0
+        global_step = 0
 
         logger.info("Starting Transformer Encoder training for %d epochs (seed=%d)...", self.epochs, self.seed)
         for epoch in range(1, self.epochs + 1):
@@ -313,15 +421,24 @@ class TransformerEncoderClassifier(BaseTopicClassifier):
                         torch.nn.utils.clip_grad_norm_(self.model.parameters(), self.grad_clip)
                     scaler.step(optimizer)
                     scaler.update()
-                    scheduler.step()
+                    global_step += 1
+                    if plateau_scheduler is not None:
+                        if global_step <= warmup_steps:
+                            scale = min(1.0, float(global_step) / float(warmup_steps))
+                            for pg, blr in zip(optimizer.param_groups, base_lrs):
+                                pg["lr"] = blr * scale
+                    elif scheduler is not None:
+                        scheduler.step()
                     optimizer.zero_grad()
 
             avg_loss = running_loss / max(1, len(train_loader))
+            lr_backbone_epoch = optimizer.param_groups[0]["lr"]
+            lr_head_epoch = optimizer.param_groups[-1]["lr"]
             record: Dict[str, Any] = {
                 "epoch": epoch,
                 "train_loss": round(avg_loss, 5),
-                "lr_backbone": optimizer.param_groups[0]["lr"],
-                "lr_head": optimizer.param_groups[-1]["lr"],
+                "lr_backbone": lr_backbone_epoch,
+                "lr_head": lr_head_epoch,
                 "epoch_time_sec": round(time.perf_counter() - t0, 2),
             }
 
@@ -339,14 +456,30 @@ class TransformerEncoderClassifier(BaseTopicClassifier):
                 else:
                     bad_epochs += 1
 
+                if plateau_scheduler is not None and global_step >= warmup_steps:
+                    prev_head_lr = optimizer.param_groups[-1]["lr"]
+                    plateau_scheduler.step(score)
+                    new_head_lr = optimizer.param_groups[-1]["lr"]
+                    if new_head_lr < prev_head_lr - 1e-12:
+                        logger.info(
+                            "ReduceLROnPlateau triggered after epoch %d: head_lr %.2e -> %.2e | backbone_lr %.2e -> %.2e",
+                            epoch,
+                            prev_head_lr,
+                            new_head_lr,
+                            lr_backbone_epoch,
+                            optimizer.param_groups[0]["lr"],
+                        )
+
                 logger.info(
-                    "Epoch %d/%d | train_loss=%.4f | val_loss=%.4f | val_macro_05=%.4f | val_macro_tuned=%.4f (%.1fs)",
+                    "Epoch %d/%d | train_loss=%.4f | val_loss=%.4f | val_macro_05=%.4f | val_macro_tuned=%.4f | lr_b=%.2e | lr_h=%.2e (%.1fs)",
                     epoch,
                     self.epochs,
                     avg_loss,
                     val_stats["val_loss"],
                     val_stats["val_macro_f1_05"],
                     val_stats["val_macro_f1_tuned"],
+                    lr_backbone_epoch,
+                    lr_head_epoch,
                     record["epoch_time_sec"],
                 )
             else:
@@ -394,6 +527,10 @@ class TransformerEncoderClassifier(BaseTopicClassifier):
                         "msd_p": self.msd_p,
                         "attn_dim": self.attn_dim,
                         "force_custom_head": self.force_custom_head,
+                        "use_last4_layers": self.use_last4_layers,
+                        "label_interaction": self.label_interaction,
+                        "label_hidden_dim": self.label_hidden_dim,
+                        "label_dropout": self.label_dropout,
                     },
                     indent=2,
                 ),

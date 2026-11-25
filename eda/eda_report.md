@@ -62,7 +62,7 @@ Mục đích: Khảo sát cấu trúc phân bố, tính chất đa nhãn (multi-
   - `6` nhãn: 2 tweet (0.0%)
 
 > [!IMPORTANT]
-> Vì hơn 90% các vị trí nhãn trong ma trận $Y$ là số 0 (nhãn âm), hàm mất mát tiêu chuẩn `BCEWithLogitsLoss` dễ bị áp đảo bởi các mẫu âm tính dễ (easy negatives). Đây là lý do kiến trúc cần tích hợp kỹ thuật **Asymmetric Loss (ASL)** hoặc **Focal Loss** để cân bằng gradient.
+> Vì hơn 90% các vị trí nhãn trong ma trận $Y$ là nhãn âm (negative), hàm `BCEWithLogitsLoss` chuẩn dễ khiến gradient bị chi phối bởi easy negatives trên 13 tail classes. Thực nghiệm ablation chứng minh **Damped Weighted BCE** ($w_c = \min((N_{\text{neg},c}/N_{\text{pos},c})^{0.5},\, 6.0)$) xử lý hiệu quả long-tail imbalance mà không gây sụp đổ probability calibration như Naive Weighted BCE, Focal Loss hay Asymmetric Loss (ASL).
 
 ---
 

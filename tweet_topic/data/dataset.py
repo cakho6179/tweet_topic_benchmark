@@ -27,7 +27,7 @@ class TweetTopicDataModule:
         self.dataset_name = dataset_name
         self.train_split = train_split
         self.val_split = val_split
-        self.test_splits = test_splits or ["test_2020", "test_2021"]
+        self.test_splits = ["test_2020", "test_2021"] if test_splits is None else list(test_splits)
         self.max_train_samples = max_train_samples
         self.max_eval_samples = max_eval_samples
         self.raw_dataset = None

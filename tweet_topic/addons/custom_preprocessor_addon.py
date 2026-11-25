@@ -113,3 +113,68 @@ class TweetTextCleaner:
             t = re.sub(r"\s+", " ", t).strip()
             cleaned.append(t)
         return cleaned
+
+
+EMOJI_TOPIC_MAP_V2: Dict[str, str] = {
+    **EMOJI_TOPIC_MAP,
+    # Neutralize heart overexpression so casual likes do not trigger FP relationships
+    "\u2764": " love ",
+    "\u2665": " love ",
+    "\u2661": " love ",
+    "\u2728": " ",
+    # Missing BMP symbols discovered on validation_2020 [UNK] audit
+    "\u263a": " happy ",
+    "\u2639": " sad ",
+    "\u2753": " ? ",
+    "\u2754": " ? ",
+    "\u2744": " winter ",
+    "\u2746": " winter ",
+    "\u260e": " phone ",
+    "\u261d": " ",
+    "\u2714": " ",
+    "\u2705": " ",
+}
+
+_EMOJI_KEYS_V2 = sorted(EMOJI_TOPIC_MAP_V2, key=len, reverse=True)
+_EMOJI_DEDUP_V2 = re.compile("(" + "|".join(re.escape(k) for k in _EMOJI_KEYS_V2) + r")(?:\s*\1)+")
+_EMOJI_PATTERN_V2 = re.compile("|".join(re.escape(k) for k in _EMOJI_KEYS_V2))
+_RESIDUAL_SYMBOLS_RE = re.compile(r"[\u2190-\u21FF\u25A0-\u27BF\u2900-\u297F\u2B00-\u2BFF]+")
+
+
+@register_preprocessor("tweet_text_cleaner_v2")
+class TweetTextCleanerV2:
+    """Validation-driven v2 normalizer eliminating WordPiece [UNK] tokens & heart bias."""
+
+    def __init__(self, config=None):
+        self.config = config or {}
+        self.verbalize_emojis = bool(self.config.get("verbalize_emojis", True))
+
+    def transform(self, texts: List[str]) -> List[str]:
+        cleaned = []
+        for text in texts:
+            t = unicodedata.normalize("NFKC", str(text))
+            for ch in ("\ufe0f", "\u200d", "\u200b", "\u200c", "\u20e3", "\ufeff", "\ufffd"):
+                t = t.replace(ch, "")
+            t = t.replace("\u13a9", "A")
+            t = t.replace("{{USERNAME}}", "@user")
+            t = re.sub(r"\{@(.*?)@\}", r"@ \1", t)
+            t = t.replace("{{URL}}", "http link")
+            for src, dst in (
+                ("\u2019", "'"), ("\u2018", "'"),
+                ("\u201c", '"'), ("\u201d", '"'),
+                ("\u275d", '"'), ("\u275e", '"'),
+                ("\u00ab", '"'), ("\u00bb", '"'),
+                ("\u2014", " - "), ("\u2013", " - "),
+                ("\u2026", "..."), ("\u2022", " "),
+            ):
+                t = t.replace(src, dst)
+            if self.verbalize_emojis:
+                t = _EMOJI_DEDUP_V2.sub(r"\1", t)
+                t = _EMOJI_PATTERN_V2.sub(lambda m: EMOJI_TOPIC_MAP_V2[m.group(0)], t)
+            t = _RESIDUAL_SYMBOLS_RE.sub(" ", t)
+            t = "".join(" " if unicodedata.category(ch) == "So" else ch for ch in t)
+            t = re.sub(r"#\w+", lambda m: _split_hashtag(m.group(0)), t)
+            t = re.sub(r"([!?.]){2,}", r"\1", t)
+            t = re.sub(r"\s+", " ", t).strip()
+            cleaned.append(t)
+        return cleaned
