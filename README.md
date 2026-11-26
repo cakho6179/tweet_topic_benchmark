@@ -12,12 +12,13 @@ So sánh hiệu năng trên tập In-Time (`test_2020`, $N = 573$) và Out-of-Ti
 
 | Stage / Model | Key Component Added | `test_2020` Micro / Macro | `test_2021` Micro-F1 | `test_2021` Macro-F1 | `test_2021` Exact Match | Zero-F1 Classes | OOT Drift ($\Delta$ Micro) |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **ML Baseline** | Dual TF-IDF (Word + Char) + OvR LR | `0.6258 / 0.5171` | `0.5944` | `0.4832` | `34.07%` | `0 / 19` | `-3.14 pts` |
-| **`S0 @ 0.50`** | Stock `bert-base-uncased` + BCE (default $\tau=0.50$) | `0.6808 / 0.4535` | `0.6775` | `0.4408` | `43.95%` | `5 / 19` | `-0.33 pts` |
-| **`S0 @ 0.30`** | Stock `bert-base-uncased` + Global Threshold Tuning | `0.6860 / 0.5425` | `0.6852` | `0.5204` | `40.56%` | `1 / 19` | `-0.08 pts` |
-| **`S1`** | Custom Head (`LN -> Dropout -> Linear`) + Differential LR | `0.7131 / 0.5762` | `0.7069` | `0.5313` | `43.78%` | `0 / 19` | `-0.62 pts` |
-| **`S2`** | `+ TweetTextCleaner` (WordPiece-Aware Preprocessing) | `0.7138 / 0.5964` | `0.7097` | `0.5469` | `44.73%` | `0 / 19` | `-0.41 pts` |
-| **`S3`** | `+ ResidualHybridPooling` (`[CLS]` + Attention) + MSD ($K=5$) | `0.7204 / 0.6041` | `0.7124` | `0.5567` | `44.79%` | `0 / 19` | `-0.80 pts` |
+| **COLING 2022 (`TimeLMs-2020`)** | Published Temporal RoBERTa (58M tweets) | `0.6780 / 0.5340` | `0.6550` | `0.4510` | `—` | `—` | `-2.30 pts` |
+| **ML Baseline** | Dual TF-IDF 100k (Word + Char) + OvR LR | `0.6890 / 0.5227` | `0.6154` | `0.3997` | `34.07%` | `—` | `-7.36 pts` |
+| **`S0 @ 0.50`** | Stock `bert-base-uncased` + BCE (default $\tau=0.50$) | `0.6971 / 0.3709` | `0.6705` | `0.3151` | `43.95%` | `6 / 19` | `-2.66 pts` |
+| **`S0 @ 0.30`** | Stock `bert-base-uncased` + Global Threshold Tuning | `0.7185 / 0.5095` | `0.6854` | `0.4623` | `40.56%` | `1 / 19` | `-3.31 pts` |
+| **`S1`** | Custom Head + Differential LR (`5e-4`, `25×`) | `0.7503 / 0.6615` | `0.7063` | `0.5786` | `43.06%` | `0 / 19` | `-4.40 pts` |
+| **`S2`** | `+ TweetTextCleaner` (WordPiece-Aware Preprocessing) | `0.7527 / 0.6582` | `0.7094` | `0.5692` | `44.07%` | `0 / 19` | `-4.33 pts` |
+| **`S3`** | `+ ResidualHybridPooling` (`[CLS]` + Mean + Attn) + MSD (`K=5`) | `0.7437 / 0.6334` | `0.7166` | `0.5674` | `44.01%` | `0 / 19` | `-2.71 pts` |
 | **`S4` (Proposed)** | **`+ Damped W-BCE` ($p=0.5, w_{\max}=6.0$) + $\tau = 0.60$** | **`0.7360 / 0.6470`** | **`0.7186`** | **`0.5808`** | **`45.32%`** | **`0 / 19`** | **`-1.74 pts`** |
 | **`S4` (3-Seed Avg)** | Probability Averaging across seeds `{42, 1337, 2024}` | `0.7434 / 0.6611` *(val)* | **`0.7220`** | **`0.5896`** | **`46.22%`** | **`0 / 19`** | — |
 
@@ -39,7 +40,7 @@ So sánh hiệu năng trên tập In-Time (`test_2020`, $N = 573$) và Out-of-Ti
 | **[`docs/technical_report.md`](docs/technical_report.md)** | Báo cáo kỹ thuật đầy đủ: Đặc tả toán học, SOTA HuggingFace, EDA, Controlled Ablation `S0 -> S4`, đối chiếu `15ep ReduceLROnPlateau + LLRD`, và Deep Error Analysis (`test_2021`). |
 | **[`docs/validation_error_analysis.md`](docs/validation_error_analysis.md)** | Chẩn đoán gốc rễ lỗi theo giao thức **Zero Test Leakage** (`test_splits_accessed = []`) trên `validation_2020` (`532` binary errors, 5-Model Consensus Audit). |
 | **[`eda/eda_report.md`](eda/eda_report.md)** | Báo cáo Exploratory Data Analysis chi tiết trên `train_2020`, `validation_2020`, `test_2020`, `test_2021` (Long-Tail `20.18:1`, Multi-Label Co-occurrence, Temporal Drift $JS = 0.1377$). |
-| **[`presentation/tweet_topic_bert_evaluation.pptx`](presentation/tweet_topic_bert_evaluation.pptx)** | Bộ slide thuyết trình hoàn chỉnh (**28 slides**), đồng bộ toàn bộ số liệu, phương trình toán học và các phát hiện cốt lõi từ Error Analysis. |
+| **[`presentation/tweet_topic_bert_evaluation.pptx`](presentation/tweet_topic_bert_evaluation.pptx)** | Bộ slide thuyết trình tinh gọn (**20 slides**, Người trình bày: **Nguyễn Văn Sơn**), trang bìa không spoil kết quả, đồng bộ toàn bộ phương trình toán học và 6 slide trọng tâm Error Analysis & Insights. |
 
 ---
 
@@ -72,7 +73,7 @@ tweet_topic_benchmark/
 │   ├── validation_error_analysis.md           # Chẩn đoán gốc rễ lỗi Zero-Leakage trên validation_2020
 │   └── figures/                               # 15 biểu đồ chuẩn hóa (fig01..fig15) dùng trong báo cáo
 ├── presentation/
-│   └── tweet_topic_bert_evaluation.pptx       # Bộ slide thuyết trình chính thức (28 slides)
+│   └── tweet_topic_bert_evaluation.pptx       # Bộ slide thuyết trình tinh gọn (20 slides — Nguyễn Văn Sơn)
 ├── eda/
 │   ├── run_eda.py                             # Script EDA thuần CPU
 │   ├── eda_report.md                          # Báo cáo EDA
