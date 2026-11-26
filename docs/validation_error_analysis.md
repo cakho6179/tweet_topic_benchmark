@@ -2,7 +2,7 @@
 
 **Phạm vi đánh giá:** `validation_2020` (`573` tweets; `311` failed samples của Baseline `S4 @ 0.60` với `532` binary errors = `246 FP + 286 FN`) và phân tích từ vựng đối chiếu từ `train_2020` (`4,585` tweets).  
 **Giao thức Zero Test Leakage:** `test_splits_accessed = []` — hoàn toàn không truy cập `test_2020` hay `test_2021`.  
-**Dữ liệu tổng hợp:** `outputs/val_2020_forensic_root_cause.json` (Multi-Model Consensus trên 5 mô hình huấn luyện 100% trên Kaggle GPU: `S4 seed 42`, `S4 seed 1337`, `S4 seed 2024`, `ValFix-2B`, `ValFix-2A`) kèm đối chiếu chi tiết 311 failed samples trên `validation_2020`.
+**Dữ liệu & Notebook kiểm chứng:** `outputs/val_2020_forensic_root_cause.json` (Multi-Model Consensus trên 5 mô hình huấn luyện 100% trên Kaggle GPU: `S4 seed 42`, `S4 seed 1337`, `S4 seed 2024`, `ValFix-2B`, `ValFix-2A`) và mã nguồn kiểm chứng tái lập tại [`analysis/tweet_topic_evaluation_and_error_analysis.ipynb`](../analysis/tweet_topic_evaluation_and_error_analysis.ipynb) (**Section 7**).
 
 ---
 

@@ -1,9 +1,11 @@
 # BÁO CÁO ĐỒ ÁN MÔN HỌC DEEP LEARNING
 ## Multi-Label Twitter Topic Classification bằng Mô hình BERT Cải tiến Lũy tiến (`S0 -> S4`)
 
+**Người thực hiện:** Nguyễn Văn Sơn  
 **Phương pháp Deep Learning trọng tâm:** Pre-trained Transformer Encoder (`bert-base-uncased`, 110M parameters)  
 **Bộ dữ liệu chuẩn hóa:** [`cardiffnlp/tweet_topic_multi`](https://huggingface.co/datasets/cardiffnlp/tweet_topic_multi) (19 topics, temporal split `2020 -> 2021`)  
 **Cơ sở đối chiếu:** Dòng nghiên cứu `TweetTopic & Social Media NLP` (*Antypas et al., COLING 2022* cùng các checkpoint SOTA trên HuggingFace Hub) và lexical baseline TF-IDF + Logistic Regression (OvR)  
+**Notebook tái lập toàn bộ đánh giá & phân tích lỗi (Pure-CPU, pre-executed):** [`analysis/tweet_topic_evaluation_and_error_analysis.ipynb`](../analysis/tweet_topic_evaluation_and_error_analysis.ipynb)  
 **Cấu trúc báo cáo 5 phần:** **Phần 1. Phát biểu Bài toán** $\rightarrow$ **Phần 2. Tổng quan Nghiên cứu, SOTA & Research Gaps** $\rightarrow$ **Phần 3. Exploratory Data Analysis (EDA) & Tiền xử lý** $\rightarrow$ **Phần 4. Mô hình hóa với BERT (`S0 -> S4`)** $\rightarrow$ **Phần 5. Đánh giá Thực nghiệm, Error Analysis (`S4`) & Kết luận**.
 
 ---
@@ -15,6 +17,7 @@
 * [PHẦN 3. EXPLORATORY DATA ANALYSIS (EDA) & WORDPIECE-AWARE PREPROCESSING](#phần-3-exploratory-data-analysis-eda--wordpiece-aware-preprocessing)
 * [PHẦN 4. MÔ HÌNH HÓA — CONTROLLED ABLATION LADDER (`S0 -> S4`)](#phần-4-mô-hình-hóa--controlled-ablation-ladder-s0---s4)
 * [PHẦN 5. ĐÁNH GIÁ THỰC NGHIỆM, ERROR ANALYSIS (`S4`) & KẾT LUẬN](#phần-5-đánh-giá-thực-nghiệm-error-analysis-s4--kết-luận)
+* [PHỤ LỤC — TRUY XUẤT MÃ NGUỒN, CONFIG & NOTEBOOK (CODE PROVENANCE)](#phụ-lục--truy-xuất-mã-nguồn-config--notebook-code-provenance)
 * [TÀI LIỆU THAM KHẢO](#tài-liệu-tham-khảo)
 
 ---
@@ -37,7 +40,14 @@ Cho văn bản tweet tiếng Anh $x \in \mathcal{X}$ (độ dài tối đa $L \l
 
 $$\hat{p}_c = \sigma(z_c) = \frac{1}{1 + e^{-z_c}}, \qquad \hat{y}_c = \mathbb{I}(\hat{p}_c \ge \tau), \quad \forall c \in \{1, \dots, 19\}$$
 
-**Bộ 4 tiêu chí đánh giá xác lập trước thực nghiệm:**
+**Bộ tiêu chí đánh giá xác lập trước thực nghiệm (Precision, Recall & 4 Tiêu chí F1 / Stability):**
+
+Trước khi tổng hợp thành F1, mọi quyết định phân loại đều được đo bằng cặp chỉ số nền tảng **Precision** (độ chính xác dương: trong các nhãn mô hình dự đoán, có bao nhiêu phần trăm thực sự đúng — phản ánh kiểm soát **False Positive / gán nhãn thừa**) và **Recall** (độ phủ nhãn thật: trong các nhãn ground-truth, mô hình tìm ra bao nhiêu phần trăm — phản ánh kiểm soát **False Negative / bỏ sót nhãn**):
+
+$$\text{Precision}_c = \frac{\text{TP}_c}{\text{TP}_c + \text{FP}_c}, \qquad \text{Recall}_c = \frac{\text{TP}_c}{\text{TP}_c + \text{FN}_c}$$
+
+Trong đó **Micro-Precision / Micro-Recall** cộng gộp $\text{TP}, \text{FP}, \text{FN}$ trên toàn bộ $N \times 19$ quyết định nhị phân, còn **Macro-Precision / Macro-Recall** lấy trung bình đều trên cả $19$ lớp; chỉ số $\text{F1}$ chính là trung bình điều hòa của Precision và Recall.
+
 1. **Micro-F1** (đánh giá tổng hợp trên toàn bộ $N \times 19$ quyết định nhị phân) và **Macro-F1** (trung bình không trọng số $\frac{1}{19}\sum_{c=1}^{19} \text{F1}_c$ — thước đo bắt buộc để đánh giá công bằng các tail classes):
 
 $$\text{Micro-F1} = \frac{2\sum_{c=1}^{19} \text{TP}_c}{2\sum_{c=1}^{19} \text{TP}_c + \sum_{c=1}^{19} \text{FP}_c + \sum_{c=1}^{19} \text{FN}_c}, \qquad \text{Macro-F1} = \frac{1}{19} \sum_{c=1}^{19} \frac{2\,\text{TP}_c}{2\,\text{TP}_c + \text{FP}_c + \text{FN}_c}$$
@@ -170,8 +180,14 @@ Mô-đun [`TweetTextCleaner`](../tweet_topic/addons/custom_preprocessor_addon.py
 
 Đồ án tập trung chuyên sâu vào một phương pháp Deep Learning duy nhất: **`bert-base-uncased`** (*Devlin et al., NAACL 2019*; 12 Transformer Encoder layers, hidden size $d = 768$, ~110M parameters, không có Twitter pre-training), đối chiếu cùng baseline tuyến tính TF-IDF + Logistic Regression (OvR). Toàn bộ classification head đề xuất chỉ bổ sung **< 0.2% parameters (~199K)** so với backbone gốc.
 
+![Kiến trúc Gốc bert-base-uncased và Ba Điểm nghẽn S0](figures/fig05a_bert_base_original.png)  
+*Hình 4.1a: Kiến trúc gốc `bert-base-uncased` (Devlin et al., 2019 — 109.5M params) và ba điểm nghẽn của Stock Head `S0` trước khi áp dụng chuỗi cải tiến `S1 -> S4`.*
+
 ![Kiến trúc Stock Head S0 vs Kiến trúc Đề xuất S1 đến S4](figures/fig05_architecture_s0_to_s4.png)  
 *Hình 4.1: Đối chiếu baseline `S0` (Stock HuggingFace Head) và kiến trúc BERT cải tiến lũy tiến `S1 -> S4` (Global Threshold $\tau = 0.60$).*
+
+![Pipeline Khoa học End-to-End của Hệ thống S4](figures/fig05b_scientific_pipeline_s4.png)  
+*Hình 4.1b: Pipeline khoa học End-to-End của kiến trúc đề xuất `S4` (Input & WordPiece Normalization → `bert-base-uncased` 12 tầng → `ResidualHybridPooling` 3 nhánh → Multi-Sample Dropout + Shared Linear → Tách luồng Training `Damped W-BCE` / Differential LR Backprop và Inference Zero-Leakage tại $\tau = 0.60$).*
 
 ### 4.2. Controlled Ablation Ladder (`S0 -> S4`)
 
@@ -232,26 +248,53 @@ Toàn bộ các mô hình `S0 -> S4` được huấn luyện trên **Kaggle GPU 
 
 ### 5.1. Kết quả Ablation Ladder `S0 -> S4` & Đối chiếu Published Benchmarks
 
+> **Truy xuất mã nguồn & tái lập:** Toàn bộ số liệu trong Mục 5.1–5.3 được tính trực tiếp từ đầu ra Kaggle GPU (`outputs/v4_*/test_predictions.json`, `metrics_summary.json`, `val_probabilities.json`) và có thể kiểm chứng từng dòng lệnh tại [`analysis/tweet_topic_evaluation_and_error_analysis.ipynb`](../analysis/tweet_topic_evaluation_and_error_analysis.ipynb) (**Sections 1–7**).
+
 ![Tiến triển Micro-F1 và Macro-F1 từ S0 đến S4](figures/fig08_progressive_ablation_ladder.png)  
 *Hình 5.1: Hiệu năng thực nghiệm của chuỗi ablation `S0 -> S4` trên `test_2020` và `test_2021`, đối chiếu cùng mốc *Antypas et al. (COLING 2022)* và Baseline TF-IDF.*
 
-| Configuration / Published Benchmark | Threshold | `Ep` | `test_2020` Micro / Macro | `test_2021` Micro / Macro | $\Delta_{20 \to 21}$ Micro / Macro | `test_2021` Exact | `test_2021` TP / FP / FN | Zero-F1 (`2021`) |
-|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| **Antypas et al. (COLING 2022)** — `RoBERTa-base` | `0.50` | — | 0.6610 / 0.3420 | 0.6380 / 0.3110 | -2.30 / -3.10 | — | — | — |
-| **Antypas et al. (COLING 2022)** — `TimeLMs-2020` | Val-tuned | — | 0.6780 / 0.5340 | 0.6550 / 0.4510 | -2.30 / -8.30 | — | — | — |
-| **TF-IDF 100k + Logistic Regression (OvR)** | `0.50` | — | 0.6890 / 0.5227 | 0.6154 / 0.3997 | **-7.36 / -12.30** | 34.07% | — | — |
-| `S0` reference at fixed `0.50` | `0.50` | 8 / 10 | 0.6971 / 0.3709 | 0.6705 / 0.3151 | -2.66 / -5.58 | 43.95% | — | **6 / 19** |
-| **`S0`: BERT Stock Head + BCE** | Global (`0.30`) | 8 / 10 | 0.7185 / 0.5095 | 0.6854 / 0.4623 | -3.31 / -4.72 | 40.56% | 1,807 / 862 / 797 | **1 / 19** |
-| **`S1`: + Custom Head & Diff LR (`5e-4`)** | Global (`0.35`) | 6 / 9 | 0.7503 / **0.6615** | 0.7063 / 0.5786 | -4.40 / -8.29 | 43.06% | 1,867 / 816 / 737 | **0 / 19** |
-| **`S2`: + `TweetTextCleaner` (WordPiece)** | Global (`0.40`) | 6 / 9 | **0.7527** / 0.6582 | 0.7094 / 0.5692 | -4.33 / -8.90 | 44.07% | 1,843 / **749** / 761 | **0 / 19** |
-| **`S3`: + `ResidualHybridPooling` + MSD (`K=5`)** | Global (`0.30`) | 3 / 6 | 0.7437 / 0.6334 | 0.7166 / 0.5674 | -2.71 / -6.60 | 44.01% | **1,905** / 808 / **699** | **0 / 19** |
-| **`S4`: + `Damped W-BCE` ($p=0.5, w_{\max}=6.0$)** | **Global (`0.60`)** | **3 / 6** | **0.7360 / 0.6470** | **0.7186 / 0.5808** | **-1.74 / -6.62** | **45.32%** | **1,882 / 752 / 722** | **0 / 19** |
+| Configuration / Published Benchmark | Threshold | `Ep` | `val_2020` Micro / Macro | `test_2020` Micro / Macro | `test_2021` Micro / Macro | $\Delta_{20 \to 21}$ Micro / Macro | `test_2021` Exact | `test_2021` TP / FP / FN | Zero-F1 (`2021`) |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **Antypas et al. (COLING 2022)** — `RoBERTa-base` | `0.50` | — | — | 0.6610 / 0.3420 | 0.6380 / 0.3110 | -2.30 / -3.10 | — | — | — |
+| **Antypas et al. (COLING 2022)** — `TimeLMs-2020` | Val-tuned | — | — | 0.6780 / 0.5340 | 0.6550 / 0.4510 | -2.30 / -8.30 | — | — | — |
+| **TF-IDF 100k + Logistic Regression (OvR)** | `0.50` | — | 0.6538 / 0.5284 | 0.6890 / 0.5227 | 0.6154 / 0.3997 | **-7.36 / -12.30** | 34.07% | — | — |
+| `S0` reference at fixed `0.50` | `0.50` | 8 / 10 | 0.6540 / 0.3415 | 0.6971 / 0.3709 | 0.6705 / 0.3151 | -2.66 / -5.58 | 43.95% | — | **6 / 19** |
+| **`S0`: BERT Stock Head + BCE** | Global (`0.30`) | 8 / 10 | 0.6891 / 0.5070 | 0.7185 / 0.5095 | 0.6854 / 0.4623 | -3.31 / -4.72 | 40.56% | 1,807 / 862 / 797 | **1 / 19** |
+| **`S1`: + Custom Head & Diff LR (`5e-4`)** | Global (`0.35`) | 6 / 9 | 0.7304 / **0.6419** | 0.7503 / **0.6615** | 0.7063 / 0.5786 | -4.40 / -8.29 | 43.06% | 1,867 / 816 / 737 | **0 / 19** |
+| **`S2`: + `TweetTextCleaner` (WordPiece)** | Global (`0.40`) | 6 / 9 | 0.7316 / 0.6270 | **0.7527** / 0.6582 | 0.7094 / 0.5692 | -4.33 / -8.90 | 44.07% | 1,843 / **749** / 761 | **0 / 19** |
+| **`S3`: + `ResidualHybridPooling` + MSD (`K=5`)** | Global (`0.30`) | 3 / 6 | **0.7327** / 0.6178 | 0.7437 / 0.6334 | 0.7166 / 0.5674 | -2.71 / -6.60 | 44.01% | **1,905** / 808 / **699** | **0 / 19** |
+| **`S4`: + `Damped W-BCE` ($p=0.5, w_{\max}=6.0$)** | **Global (`0.60`)** | **3 / 6** | **0.7269 / 0.6328** | **0.7360 / 0.6470** | **0.7186 / 0.5808** | **-1.74 / -6.62** | **45.32%** | **1,882 / 752 / 722** | **0 / 19** |
 
-**Đóng góp định lượng từng bước:**
+**Đóng góp định lượng từng bước (và bằng chứng Zero Overfitting trên `validation_2020`):**
+0. **Đối chiếu `val_2020` $\leftrightarrow$ `test_2020`:** Trên `S4 @ 0.60`, hiệu năng `validation_2020` (`0.7269 / 0.6328`, Exact Match `45.72%`) không vượt `test_2020` (`0.7360 / 0.6470`, Exact Match `47.47%`), xác nhận việc chọn Early Stopping và khóa 1 Global Threshold $\tau = 0.60$ trên tập validation nhỏ ($N = 573$) hoàn toàn không bị overfitting. Bước `S3 -> S4` đồng thời nâng `val_2020` Macro-F1 thêm **`+1.50` pts** (`0.6178 -> 0.6328`).
 1. **`S0 -> S1`:** Xóa sổ hoàn toàn class collapse (`6/19` tại `0.50` và `1/19` tại global về **`0/19`**), tăng **`+2.09` Micro-F1 và `+11.63` Macro-F1** trên `test_2021`.
 2. **`S1 -> S2`:** `TweetTextCleaner` giảm **`67 FP`** trên `test_2021` (`816 -> 749`), nâng Exact Match `43.06% -> 44.07%` và tăng Micro-F1 trên cả hai năm.
 3. **`S2 -> S3`:** `ResidualHybridPooling + MSD` thu hồi thêm **`+62 TP`** (`1,843 -> 1,905`), nâng mạnh nhóm tweet $\ge 3$ labels (`+3.65` pts) và giảm temporal drift `2020 -> 2021` từ `-4.33` xuống `-2.71` pts.
 4. **`S3 -> S4`:** `Damped W-BCE` đưa Global Threshold tối ưu về **`τ = 0.60`**, cắt tiếp `56 FP` (`808 -> 752`), đạt đỉnh toàn hệ thống trên `test_2021` ở cả **Micro-F1 (`0.7186`)**, **Macro-F1 (`0.5808`)** lẫn **Exact Match (`45.32%`)**, với temporal drift chỉ **`-1.74` pts** (ổn định gấp `4.2×` TF-IDF).
+
+#### Đánh giá cân bằng Precision & Recall qua từng bước (`test_2021`)
+
+![Đánh giá Precision và Recall từ S0 đến S4 trên test_2021](figures/fig08b_precision_recall_evaluation.png)  
+*Hình 5.1b: Tiến triển Micro/Macro Precision & Recall qua các cấu hình TF-IDF và `S0 -> S4` trên `test_2021`.*
+
+| Cấu hình (`test_2021`) | Threshold | Micro-Precision | Micro-Recall | Micro-F1 | Macro-Precision | Macro-Recall | Macro-F1 |
+|:---|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **TF-IDF 100k + OvR** | `0.50` | 0.6865 | 0.5576 | 0.6154 | 0.5391 | 0.3466 | 0.3997 |
+| **`S0` @ `0.50`** | `0.50` | **0.7933** | 0.5806 | 0.6705 | 0.5413 | 0.2727 | 0.3151 |
+| **`S0` @ `τ = 0.30`** | `0.30` | 0.6770 | 0.6939 | 0.6854 | 0.6072 | 0.4409 | 0.4623 |
+| **`S1` @ `τ = 0.35`** | `0.35` | 0.6959 | 0.7170 | 0.7063 | 0.5983 | 0.5780 | 0.5786 |
+| **`S2` @ `τ = 0.40`** | `0.40` | 0.7110 | 0.7078 | 0.7094 | **0.6162** | 0.5505 | 0.5692 |
+| **`S3` @ `τ = 0.30`** | `0.30` | 0.7022 | **0.7316** | 0.7166 | 0.6101 | 0.5629 | 0.5674 |
+| **`S4` @ `τ = 0.60`** | `0.60` | **0.7145** | **0.7227** | **0.7186** | 0.5848 | **0.6032** | **0.5808** |
+
+1. **"Ảo giác Precision" ở `S0 @ 0.50`:** `S0` tại ngưỡng mặc định đạt Micro-P rất cao (`79.33%`) chỉ vì dự đoán quá bảo thủ (chỉ bắn vào các head classes dễ), kéo theo Micro-R tụt sâu (`58.06%`), Macro-R chỉ đạt `27.27%` và **`6/19` lớp hiếm bị sụp đổ hoàn toàn**.
+2. **Vai trò bổ trợ rõ rệt giữa `S1 -> S3`:** `S1` mở khóa mạnh **Macro-R** (`44.09% -> 57.80%`, **`+13.71` pts**); `S2` (`TweetTextCleaner`) làm sạch nhiễu tweet giúp lập đỉnh **Macro-P (`61.62%`)** và tăng Micro-P (`+1.51` pts, giảm `67 FP`); `S3` (`ResidualHybridPooling + MSD`) thu hồi thêm `+62 TP` để lập đỉnh **Micro-R (`73.16%`)**.
+3. **Điểm cân bằng tối ưu tại `S4 @ 0.60`:** `Damped W-BCE` + $\tau = 0.60$ đưa **Micro-P (`71.45%`) $\approx$ Micro-R (`72.27%`)** (độ lệch chỉ `0.82%`), đồng thời lập đỉnh **Macro-R (`60.32%`)** (`+33.05` pts so với `S0 @ 0.50`), từ đó đồng thời đạt cực đại ở cả **Micro-F1 (`0.7186`)**, **Macro-F1 (`0.5808`)** và **Exact Match (`45.32%`)**.
+
+> **Tổng hợp Nguồn gốc Baseline, Kiến trúc 2 Tầng (`S1` vs `S2–S4`) & Cân bằng Precision–Recall:**
+> * **Nguồn gốc 4 nhóm baseline:** (i) *Paper COLING 2022* (`TimeLMs-2020`, `RoBERTa-base` trích từ Antypas et al., 2022); (ii) *HuggingFace Hub* (model cards CardiffNLP `roberta-large`, `tw-rob-90m`); (iii) `TF-IDF 100k OvR` (ML) và (iv) `S0 Stock BERT` (DL mặc định) cùng được huấn luyện sạch trên Kaggle GPU với tập `train_2020`.
+> * **Kiến trúc thực nghiệm 2 tầng (`S1` vs `S2–S4`):** `S1` tạo bước nhảy lớn nhất vì đóng vai trò **Tầng 1 (gỡ lỗi hội tụ nền)** — loại bỏ `BertPooler tanh` và tách `Differential LR 25×` để `13` lớp hiếm thoát trạng thái gradient bão hòa; đây là điều kiện tiên quyết trước khi đo lường **Tầng 2 (`S2–S4`)**. Riêng ở **`S2` (`TweetTextCleaner`)**, dù `Macro-F1` tạm chững nhẹ (`0.5786 -> 0.5692`) do ngưỡng validation dịch chặt hơn (`0.35 -> 0.40`), `S2` cải thiện đúng mục tiêu làm sạch nhiễu: giảm **`-67 FP`** (`816 -> 749`), lập đỉnh toàn hệ thống về **`Macro-Precision = 0.6162`**, tăng `Exact Match` (`43.06% -> 44.07%`) và tăng `Micro-F1` đồng thời trên cả `val_2020`, `test_2020` lẫn `test_2021`, tạo đầu vào sạch để `S3–S4` bứt phá Recall.
+> * **Cân bằng Precision–Recall:** So sánh `S0 @ 0.50` (`79.3% P / 58.1% R`, bảo thủ cực đoan gây sập `6/19` lớp) và `S4 @ 0.50` (`67.1% P / 75.8% R`, kéo Recall quá tay làm tăng báo nhầm) khẳng định mốc **`S4 @ 0.60`** (`71.5% P ≈ 72.3% R`, lệch chỉ `0.8%`) là điểm cân bằng tối ưu thực tế.
 
 ### 5.2. Global Threshold (`τ = 0.60`) & Multi-Seed Stability (`S4`)
 
@@ -268,12 +311,12 @@ Toàn bộ các mô hình `S0 -> S4` được huấn luyện trên **Kaggle GPU 
 ![Kiểm chứng Multi-Seed Stability của S4](figures/fig09_multiseed_stability.png)  
 *Hình 5.2: Kết quả `S4` (`Global τ = 0.60`) qua 3 random seeds độc lập — độ lệch chuẩn nhỏ ($\sigma \le 0.0066$ trên `test_2021`).*
 
-| Seed | `Ep` (Best / Ran) | `test_2020` Micro-F1 | `test_2020` Macro-F1 | `test_2021` Micro-F1 | `test_2021` Macro-F1 |
-|:---:|:---:|:---:|:---:|:---:|:---:|
-| **42** | 3 / 6 | 0.7360 | 0.6470 | 0.7186 | 0.5808 |
-| **1337** | 5 / 8 | 0.7480 | 0.6567 | 0.7119 | 0.5825 |
-| **2024** | 3 / 6 | 0.7343 | 0.6528 | 0.7046 | 0.5677 |
-| **Mean $\pm$ Std** | — | **0.7394 $\pm$ 0.0061** | **0.6522 $\pm$ 0.0040** | **0.7117 $\pm$ 0.0057** | **0.5770 $\pm$ 0.0066** |
+| Seed | `Ep` (Best / Ran) | `val_2020` Micro / Macro | `test_2020` Micro-F1 | `test_2020` Macro-F1 | `test_2021` Micro-F1 | `test_2021` Macro-F1 |
+|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| **42** | 3 / 6 | 0.7269 / 0.6328 | 0.7360 | 0.6470 | 0.7186 | 0.5808 |
+| **1337** | 5 / 8 | 0.7360 / 0.6426 | 0.7480 | 0.6567 | 0.7119 | 0.5825 |
+| **2024** | 3 / 6 | 0.7288 / 0.6520 | 0.7343 | 0.6528 | 0.7046 | 0.5677 |
+| **Mean $\pm$ Std** | — | **0.7306 $\pm$ 0.0039 / 0.6425 $\pm$ 0.0078** | **0.7394 $\pm$ 0.0061** | **0.6522 $\pm$ 0.0040** | **0.7117 $\pm$ 0.0057** | **0.5770 $\pm$ 0.0066** |
 
 ### 5.3. Error Analysis Chuyên sâu & Audit Toàn bộ `918 / 1,679` Failed Samples (`S4`, `test_2021`)
 
@@ -317,7 +360,7 @@ Toàn bộ các mô hình `S0 -> S4` được huấn luyện trên **Kaggle GPU 
 ![Phân rã 4 tầng ngân sách lỗi 3-Seed S4 Consensus và tổng hợp gains trên test_2021](figures/fig13_error_budget_synthesis.png)  
 *Hình 5.8: Phân rã 4-Stratum Error Budget qua `3-Seed S4 Consensus` trên `test_2021` (`1,474` binary errors), bất đối xứng `FP` vs `FN` và các đòn bẩy Zero-Retrain.*
 
-#### Giải phẫu Cơ chế Lỗi Sâu bên trong BERT (`deep_error_insights_s4.json`)
+#### Giải phẫu Cơ chế Lỗi Sâu bên trong BERT (Notebook Sections 4–6: [`tweet_topic_evaluation_and_error_analysis.ipynb`](../analysis/tweet_topic_evaluation_and_error_analysis.ipynb))
 
 Khai phá định lượng trên toàn bộ probability matrix và surface features của `test_2021` (`N = 1,679`), đối chiếu chéo với `validation_2020` (`N = 573`) và `test_2020` (`N = 573`), chỉ ra **5 cơ chế lỗi và insight cốt lõi**:
 
@@ -376,6 +419,26 @@ Khai phá định lượng trên toàn bộ probability matrix và surface featu
 1. **Xóa sổ hoàn toàn Class Collapse:** Giảm số lớp `F1 = 0` từ `6/19` (`S0 @ 0.50`) và `1/19` (`S0 @ global`) về **`0 / 19`** trên toàn bộ 19 chủ đề.
 2. **Đạt hiệu năng vượt trội trên Out-of-Time `test_2021`:** Mô hình hoàn thiện **`S4` (`Damped W-BCE`, Global $\tau = 0.60$)** đạt **`0.7186` Micro-F1**, **`0.5808` Macro-F1** và **`45.32%` Exact Match** — vượt mốc **Antypas et al. (COLING 2022)** **`+6.36` Micro-F1 / `+12.98` Macro-F1**, vượt TF-IDF Baseline **`+10.32` Micro / `+18.11` Macro**, và xếp **#1 Macro-F1** nhóm `train_2020` trên HuggingFace Hub (vượt cả `RoBERTa-large` 355M).
 3. **Ổn định trước Temporal Drift & Multi-Seed Reproducibility:** Suy giảm `2020 -> 2021` chỉ còn **`-1.74` pts Micro-F1** (ổn định gấp `4.2×` TF-IDF) và độ lệch chuẩn qua 3 random seeds đạt $\sigma \le 0.0066$.
+
+---
+
+## PHỤ LỤC — TRUY XUẤT MÃ NGUỒN, CONFIG & NOTEBOOK (CODE PROVENANCE)
+
+Bảng dưới ánh xạ trực tiếp mọi giai đoạn thực nghiệm, số liệu và phân tích lỗi trong báo cáo sang đúng tệp mã nguồn, cấu hình YAML và section tương ứng trong Notebook tái lập để thuận tiện đối chiếu và bảo vệ đồ án:
+
+| Nội dung trong Báo cáo & Slide | Mã nguồn / Cấu hình Huấn luyện (Kaggle GPU) | Code / Notebook Kiểm chứng (Pure CPU) |
+| :--- | :--- | :--- |
+| **EDA & Data Integrity Audit** (`7,410` tweets, Long-Tail `20.18:1`, $d_{JS} = 0.1377$) | [`eda/run_eda.py`](../eda/run_eda.py) | [`eda/eda_report.md`](../eda/eda_report.md), [`eda/eda_summary.json`](../eda/eda_summary.json) |
+| **WordPiece Preprocessing (`S2`)** (`TweetTextCleaner` 6 bước, `741` BMP) | [`tweet_topic/addons/custom_preprocessor_addon.py`](../tweet_topic/addons/custom_preprocessor_addon.py) | [`configs/v4/v4_s2_cleaner_bce.yaml`](../configs/v4/v4_s2_cleaner_bce.yaml) |
+| **Kiến trúc `S0 -> S4`** (`ResidualHybridPooling`, MSD, `Damped W-BCE`, Differential LR) | [`tweet_topic/models/bert/encoder_model.py`](../tweet_topic/models/bert/encoder_model.py), [`pooling.py`](../tweet_topic/models/bert/pooling.py), [`losses.py`](../tweet_topic/models/bert/losses.py) | [`configs/v4/v4_s0_stock_bce.yaml`](../configs/v4/v4_s0_stock_bce.yaml) → [`v4_s4_damped_wbce.yaml`](../configs/v4/v4_s4_damped_wbce.yaml) |
+| **Training Pipeline & Kaggle Dispatch** (`10ep Cosine`, `15ep Plateau + LLRD`, `3 Seeds`) | [`scripts/run.py`](../scripts/run.py), [`scripts/build_package_notebooks.py`](../scripts/build_package_notebooks.py), [`scripts/kaggle_dispatcher.py`](../scripts/kaggle_dispatcher.py) | [`configs/v4/v4_s4_damped_wbce_s1337.yaml`](../configs/v4/v4_s4_damped_wbce_s1337.yaml), [`configs/v5_15ep/`](../configs/v5_15ep/v5_s4_damped_wbce_15ep.yaml) |
+| **Bảng 5.1 & 3-Seed Stability** (`0.7186 / 0.5808`, `σ ≤ 0.0066`) | `outputs/v4_s0..s4*/metrics_summary.json` | [`tweet_topic_evaluation_and_error_analysis.ipynb`](../analysis/tweet_topic_evaluation_and_error_analysis.ipynb) (**Section 1**) |
+| **Bảng 5.3 Per-Class Recovery & Strict Substitution (`S1 -> S4`)** | `outputs/v4_s0..s4/test_predictions.json` | [`tweet_topic_evaluation_and_error_analysis.ipynb`](../analysis/tweet_topic_evaluation_and_error_analysis.ipynb) (**Section 2**), [`scripts/extract_v4_error_cases.py`](../scripts/extract_v4_error_cases.py) |
+| **Audit 918 Failed Samples (`1,474` lỗi, `{{URL}}`, `+80` EM recovery)** | `outputs/v4_s4_damped_wbce/test_predictions.json` | [`tweet_topic_evaluation_and_error_analysis.ipynb`](../analysis/tweet_topic_evaluation_and_error_analysis.ipynb) (**Section 3**) |
+| **Co-occurrence Halo (`46%`), `{@Entity@}` (`2.31×`) & Suppression (`80.7%`)** | `outputs/v4_s4_damped_wbce/test_predictions.json` | [`tweet_topic_evaluation_and_error_analysis.ipynb`](../analysis/tweet_topic_evaluation_and_error_analysis.ipynb) (**Section 4**) |
+| **Calibration (`ECE` `3.1×`), 2021 Drift & Selective Prediction (`80% Auto`)** | [`tweet_topic/evaluation/calibration.py`](../tweet_topic/evaluation/calibration.py), [`selective.py`](../tweet_topic/evaluation/selective.py) | [`tweet_topic_evaluation_and_error_analysis.ipynb`](../analysis/tweet_topic_evaluation_and_error_analysis.ipynb) (**Section 5**), [`scripts/postprocess_analysis.py`](../scripts/postprocess_analysis.py) |
+| **Qualitative Case Studies (`Idx 608`, `172`, `993`, `1145`, `8`)** | `outputs/v4_s0..s4/test_predictions.json` | [`tweet_topic_evaluation_and_error_analysis.ipynb`](../analysis/tweet_topic_evaluation_and_error_analysis.ipynb) (**Section 6**) |
+| **Zero-Leakage `validation_2020` Audit (`532` lỗi, Crowd-Noise `ValIdx 494/447/24`)** | `outputs/v4_s4_damped_wbce/val_probabilities.json` | [`tweet_topic_evaluation_and_error_analysis.ipynb`](../analysis/tweet_topic_evaluation_and_error_analysis.ipynb) (**Section 7**), [`validation_error_analysis.md`](validation_error_analysis.md) |
 
 ---
 

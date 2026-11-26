@@ -40,7 +40,8 @@ So sánh hiệu năng trên tập In-Time (`test_2020`, $N = 573$) và Out-of-Ti
 | **[`docs/technical_report.md`](docs/technical_report.md)** | Báo cáo kỹ thuật đầy đủ: Đặc tả toán học, SOTA HuggingFace, EDA, Controlled Ablation `S0 -> S4`, đối chiếu `15ep ReduceLROnPlateau + LLRD`, và Deep Error Analysis (`test_2021`). |
 | **[`docs/validation_error_analysis.md`](docs/validation_error_analysis.md)** | Chẩn đoán gốc rễ lỗi theo giao thức **Zero Test Leakage** (`test_splits_accessed = []`) trên `validation_2020` (`532` binary errors, 5-Model Consensus Audit). |
 | **[`eda/eda_report.md`](eda/eda_report.md)** | Báo cáo Exploratory Data Analysis chi tiết trên `train_2020`, `validation_2020`, `test_2020`, `test_2021` (Long-Tail `20.18:1`, Multi-Label Co-occurrence, Temporal Drift $JS = 0.1377$). |
-| **[`presentation/tweet_topic_bert_evaluation.pptx`](presentation/tweet_topic_bert_evaluation.pptx)** | Bộ slide thuyết trình tinh gọn (**20 slides**, Người trình bày: **Nguyễn Văn Sơn**), trang bìa không spoil kết quả, đồng bộ toàn bộ phương trình toán học và 6 slide trọng tâm Error Analysis & Insights. |
+| **[`analysis/tweet_topic_evaluation_and_error_analysis.ipynb`](analysis/tweet_topic_evaluation_and_error_analysis.ipynb)** | **Notebook tái lập 100% đánh giá & phân tích lỗi (Pure-CPU, pre-executed):** kiểm chứng trực tiếp bảng benchmark, 19-class recovery, 918 failed samples, Halo FP / Suppression FN, ECE / Selective Prediction và từng ca tweet thực tế. |
+| **[`presentation/tweet_topic_bert_evaluation.pptx`](presentation/tweet_topic_bert_evaluation.pptx)** | Bộ slide thuyết trình tinh gọn (**19 slides** kèm đầy đủ **Speaker Notes**, Người trình bày: **Nguyễn Văn Sơn**), trang bìa không spoil kết quả, **6 slide Kiến trúc BERT gốc & Tiến hóa S0→S4 (tích hợp Tiền xử lý S2 theo Insight)**, **đánh giá Precision–Recall** & **3 slide Error Analysis tinh gọn**. |
 
 ---
 
@@ -71,9 +72,11 @@ tweet_topic_benchmark/
 ├── docs/
 │   ├── technical_report.md                    # Báo cáo kỹ thuật tổng hợp (S0->S4 + Error Analysis)
 │   ├── validation_error_analysis.md           # Chẩn đoán gốc rễ lỗi Zero-Leakage trên validation_2020
-│   └── figures/                               # 15 biểu đồ chuẩn hóa (fig01..fig15) dùng trong báo cáo
+│   └── figures/                               # 18 biểu đồ chuẩn hóa (fig01..fig15 + fig05a/b + fig08b) dùng trong báo cáo
+├── analysis/
+│   └── tweet_topic_evaluation_and_error_analysis.ipynb  # Notebook tái lập toàn bộ đánh giá & phân tích lỗi (Pure-CPU)
 ├── presentation/
-│   └── tweet_topic_bert_evaluation.pptx       # Bộ slide thuyết trình tinh gọn (20 slides — Nguyễn Văn Sơn)
+│   └── tweet_topic_bert_evaluation.pptx       # Bộ slide thuyết trình tinh gọn (19 slides + Speaker Notes — Nguyễn Văn Sơn)
 ├── eda/
 │   ├── run_eda.py                             # Script EDA thuần CPU
 │   ├── eda_report.md                          # Báo cáo EDA
